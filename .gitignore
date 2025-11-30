@@ -9,3 +9,6 @@ venv/
 dist/
 build/
 scan_history.csv
+.venv/
+__pycache__/
+*.pyc
