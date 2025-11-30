@@ -160,5 +160,11 @@
     "was_correct": true,
     "confidence": 0.2,
     "threat_level": "\u2705 SAFE"
+  },
+  {
+    "timestamp": "2025-11-30T14:24:05.420929",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "\u2705 SAFE"
   }
 ]

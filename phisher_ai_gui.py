@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# ==== GUARDIAN AI – ACTORS GUI =================================================
-# Single-file GUI with:
-# - Top nav (Analysis / Pipeline / ACTORS / Learning)
-# - Verdict card + screenshot (if provided)
-# - Smart ACTORS question buttons
-# - Feedback buttons
-# - Learning and ACTORS views
+# ==============================================================================
+# ==== GUARDIAN AI: ACTORS FRAMEWORK  ================
+# ==============================================================================
+# - Unified Codebase: Merged logic from previous iterations.
+# - UI Polish: enhanced layout, spacing, and "SecOps" aesthetic.
+# - Feature: Live "ACTORS" reasoning terminal simulation.
+# - Feature: Dynamic Matplotlib integration with dark mode styling.
 # ==============================================================================
 
 import customtkinter as ctk
@@ -15,15 +15,40 @@ import os
 import sys
 import threading
 import queue
+import time
+import random
 from datetime import datetime
 import numpy as np
 import matplotlib
+
+# Ensure Matplotlib doesn't crash the GUI thread
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-# ----------------- Simple data holder -----------------
+# ==============================================================================
+#                                CONFIGURATION
+# ==============================================================================
+
+# Cyber/SecOps Color Palette
+COLORS = {
+    "bg_dark": "#050505",       # Deepest Black
+    "bg_card": "#0f111a",       # Dark Navy
+    "bg_nav": "#0a0c12",        # Navbar
+    "accent_blue": "#3b82f6",   # Bright Blue
+    "accent_red": "#ef4444",    # Danger Red
+    "accent_green": "#10b981",  # Success Green
+    "accent_warn": "#f59e0b",   # Warning Orange
+    "text_main": "#e2e8f0",     # Off-white
+    "text_dim": "#94a3b8",      # Gray
+}
+
+# ==============================================================================
+#                             DATA STRUCTURES
+# ==============================================================================
+
 class AnalysisResult:
+    """Holds data for a specific security scan."""
     def __init__(self, severity="✅ SAFE", reasons=None, image_path=None, confidence=0.85):
         self.severity = severity
         self.reasons = reasons or []
@@ -31,595 +56,465 @@ class AnalysisResult:
         self.confidence = confidence
         self.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-# ----------------- Mock “engine” hooks -----------------
-def mock_ai_response(query, analysis: AnalysisResult | None):
-    if analysis and "HIGH" in analysis.severity:
-        return "🚨 This looks dangerous. Do NOT click links or enter credentials."
-    if "safe" in query.lower():
-        return "✅ This appears safe based on the current information."
-    return "🔍 No immediate threats detected, but stay cautious."
+# ==============================================================================
+#                             LOGIC & MOCKS
+# ==============================================================================
 
-def mock_record_feedback(was_correct: bool, confidence: float, severity: str):
-    # Here you’d call your real analytics.record_scan_result(...)
-    pass
+class MockEngine:
+    """Simulates the backend AI/LLM processing."""
+    
+    @staticmethod
+    def get_ai_response(query, analysis: AnalysisResult | None):
+        """Simulates an LLM response with context awareness."""
+        time.sleep(1.2) # Simulate thinking
+        
+        q_lower = query.lower()
+        
+        # Context: High Risk Analysis
+        if analysis and "HIGH" in analysis.severity:
+            if "click" in q_lower or "link" in q_lower:
+                return "🚨 **CRITICAL:** Do not interact. The URL structure mimics a legitimate bank but uses a homograph attack."
+            return "This page exhibits 98% similarity to a known phishing kit. Immediate isolation recommended."
 
-def mock_calculate_accuracy():
-    # Replace with analytics.calculate_accuracy()
-    return 0.86 + np.random.random() * 0.05
+        # Context: General Safe
+        if "safe" in q_lower:
+            return "✅ Heuristic analysis indicates this page is legitimate. SSL certificates are valid and domain age is >5 years."
+            
+        if "actors" in q_lower:
+            return "The ACTORS framework (Adaptive Cognitive Threat Observation & Reasoning System) is currently monitoring this session."
+
+        return "I've analyzed the DOM structure and visual layout. No immediate anomalies detected, but standard caution is advised."
+
+    @staticmethod
+    def generate_actors_trace():
+        """Generates a fake execution trace for the ACTORS demo."""
+        steps = [
+            ("👀 OBSERVE", "Scanning visual elements... detected 'Login Button' and 'Urgency Banner'."),
+            ("🧠 REASON", "Urgency banner ('Act Now!') correlates with social engineering tactics."),
+            ("📚 RECALL", "Retrieving phishing signatures... Match found: Generic Microsoft harvest kit."),
+            ("⚖️ EVALUATE", "Confidence Score calculated: 0.92 (High)."),
+            ("🛡️ ACT", "Flagging URL as malicious. Generating user warning."),
+        ]
+        return steps
 
 # ==============================================================================
 #                                GUI CLASS
 # ==============================================================================
+
 class GuardianAI(ctk.CTk):
     def __init__(self, initial_analysis: AnalysisResult | None = None):
         super().__init__()
+        
+        # Core State
         self.current_analysis = initial_analysis
-        self.ai_response_queue: queue.Queue[str] = queue.Queue()
-        self.is_loading_ai = False
+        self.ai_queue = queue.Queue()
+        self.is_processing = False
+        
+        # UI Setup
+        self._init_window()
+        self._init_layout()
+        
+        # Start
+        self.after(100, self.show_view_analysis)
+        self.after(200, self._process_ai_queue)
 
-        self.chat_log_frame: ctk.CTkScrollableFrame | None = None
-        self.chat_entry: ctk.CTkEntry | None = None
-        self.smart_button_frame: ctk.CTkFrame | None = None
-        self.feedback_frame: ctk.CTkFrame | None = None
+    def _init_window(self):
+        self.title("🛡️ GUARDIAN AI // PhishRx IEEE Ed.")
+        self.geometry("1200x850")
+        self.minsize(1000, 700)
+        ctk.set_appearance_mode("Dark")
+        self.configure(fg_color=COLORS["bg_dark"])
 
-        self._setup_window()
-        self._setup_header()
-        self._setup_content()
-        self._setup_navigation()
-
-        self.after(100, self.show_analysis_view)
-        self.after(150, self._check_ai_response_queue)
-
-    # ---------- window + header ----------
-    def _setup_window(self):
-        self.title("🛡️ GUARDIAN AI – PhishRx")
-        self.geometry("1100x800")
-        self.minsize(950, 700)
-        ctk.set_appearance_mode("dark")
-        self.configure(fg_color="#0b1015")
-
-    def _setup_header(self):
-        header = ctk.CTkFrame(self, height=70, corner_radius=0, fg_color="#020817")
-        header.grid(row=0, column=0, sticky="ew")
-        header.grid_columnconfigure(0, weight=1)
-
-        title = ctk.CTkLabel(
-            header,
-            text="🛡️ GUARDIAN AI",
-            font=ctk.CTkFont(size=28, weight="bold"),
-            text_color="#f97373",
+    def _init_layout(self):
+        # 1. Header (Top Bar)
+        self.header = ctk.CTkFrame(self, height=60, corner_radius=0, fg_color=COLORS["bg_nav"])
+        self.header.pack(side="top", fill="x")
+        
+        # Logo Area
+        logo_lbl = ctk.CTkLabel(
+            self.header, 
+            text="🛡️ GUARDIAN AI", 
+            font=ctk.CTkFont(family="Roboto", size=22, weight="bold"),
+            text_color=COLORS["accent_blue"]
         )
-        title.grid(row=0, column=0, padx=30, pady=18, sticky="w")
+        logo_lbl.pack(side="left", padx=25, pady=15)
 
-        self.status_label = ctk.CTkLabel(
-            header,
-            text="Status: Ready",
-            font=ctk.CTkFont(size=14),
-            text_color="#22c55e",
+        # Status Indicator
+        self.status_indicator = ctk.CTkLabel(
+            self.header,
+            text="● SYSTEM READY",
+            font=ctk.CTkFont(family="Consolas", size=12),
+            text_color=COLORS["accent_green"]
         )
-        self.status_label.grid(row=0, column=1, padx=20, pady=18, sticky="e")
+        self.status_indicator.pack(side="right", padx=25)
 
-    def _setup_content(self):
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
-        self.content_frame = ctk.CTkFrame(self, fg_color="#020617", corner_radius=0)
-        self.content_frame.grid(row=1, column=0, sticky="nsew")
-        self.content_frame.grid_columnconfigure(0, weight=1)
-        self.content_frame.grid_rowconfigure(1, weight=1)
-
-    # ---------- navigation ----------
-    def _setup_navigation(self):
-        nav_frame = ctk.CTkFrame(self.content_frame, fg_color="#0f172a", height=58)
-        nav_frame.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
-        nav_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
-
+        # 2. Main Navigation (Tabs)
+        self.nav_frame = ctk.CTkFrame(self, height=50, corner_radius=0, fg_color=COLORS["bg_card"])
+        self.nav_frame.pack(side="top", fill="x", pady=(1,0)) # 1px line separator effect
+        
+        self.nav_buttons = {}
         tabs = [
-            ("📱 Analysis", self.show_analysis_view),
-            ("⚙️ Pipeline", self.show_pipeline_view),
-            ("🔬 ACTORS", self.show_actors_view),
-            ("📊 Learning", self.show_learning_view),
+            ("ANALYSIS", self.show_view_analysis),
+            ("PIPELINE", self.show_view_pipeline),
+            ("ACTORS LOGIC", self.show_view_actors),
+            ("LEARNING", self.show_view_learning)
         ]
-        self._nav_buttons = []
-        for i, (label, callback) in enumerate(tabs):
+        
+        for idx, (text, cmd) in enumerate(tabs):
             btn = ctk.CTkButton(
-                nav_frame,
-                text=label,
-                height=44,
-                font=ctk.CTkFont(size=16, weight="bold"),
-                fg_color="#1f2937" if i == 0 else "transparent",
-                text_color="#e5e7eb" if i == 0 else "#9ca3af",
-                hover_color="#1d4ed8",
-                command=lambda cb=callback, idx=i: self._on_tab_click(idx, cb),
+                self.nav_frame,
+                text=text,
+                font=ctk.CTkFont(size=14, weight="bold"),
+                fg_color="transparent",
+                text_color=COLORS["text_dim"],
+                hover_color="#1e293b",
+                width=120,
+                corner_radius=0,
+                command=lambda c=cmd, t=text: self._nav_click(t, c)
             )
-            btn.grid(row=0, column=i, padx=4, pady=7, sticky="ew")
-            self._nav_buttons.append(btn)
+            btn.pack(side="left", fill="y", padx=5)
+            self.nav_buttons[text] = btn
 
-    def _on_tab_click(self, index: int, callback):
-        for i, btn in enumerate(self._nav_buttons):
-            if i == index:
-                btn.configure(fg_color="#1f2937", text_color="#e5e7eb")
-            else:
-                btn.configure(fg_color="transparent", text_color="#9ca3af")
+        # 3. Content Area
+        self.main_content = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
+        self.main_content.pack(side="top", fill="both", expand=True, padx=20, pady=20)
+
+        # Set default active tab
+        self._highlight_nav("ANALYSIS")
+
+    def _nav_click(self, text, callback):
+        self._highlight_nav(text)
+        self._clear_content()
         callback()
 
-    def _clear_body(self):
-        # Clear everything below the nav bar (row=1+)
-        for child in self.content_frame.grid_slaves():
-            info = child.grid_info()
-            if info.get("row", 99) >= 1:
-                child.destroy()
+    def _highlight_nav(self, active_text):
+        for text, btn in self.nav_buttons.items():
+            if text == active_text:
+                btn.configure(text_color=COLORS["accent_blue"], fg_color="#171e2e")
+            else:
+                btn.configure(text_color=COLORS["text_dim"], fg_color="transparent")
+
+    def _clear_content(self):
+        for widget in self.main_content.winfo_children():
+            widget.destroy()
 
     # ==============================================================================
-    #                                VIEWS
+    #                               VIEW: ANALYSIS
     # ==============================================================================
-    def show_analysis_view(self):
-        self._clear_body()
-        self.status_label.configure(text="Analysis – upload or review last scan")
-        self._build_analysis_view()
+    
+    def show_view_analysis(self):
+        # Split into Left (Verdict) and Right (Chat)
+        self.main_content.columnconfigure(0, weight=4) # Verdict
+        self.main_content.columnconfigure(1, weight=6) # Chat
+        self.main_content.rowconfigure(0, weight=1)
 
-    def show_pipeline_view(self):
-        self._clear_body()
-        self.status_label.configure(text="Pipeline – ACTORS flow overview")
-        self._build_pipeline_view()
+        left_panel = ctk.CTkFrame(self.main_content, fg_color="transparent")
+        left_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 15))
 
-    def show_actors_view(self):
-        self._clear_body()
-        self.status_label.configure(text="ACTORS – live reasoning demo")
-        self._build_actors_view()
+        right_panel = ctk.CTkFrame(self.main_content, fg_color=COLORS["bg_card"], corner_radius=15)
+        right_panel.grid(row=0, column=1, sticky="nsew")
 
-    def show_learning_view(self):
-        self._clear_body()
-        self.status_label.configure(text="Learning – performance over time")
-        self._build_learning_view()
+        # --- LEFT PANEL: Verdict Card ---
+        self._render_verdict_card(left_panel)
 
-    # ---------- Analysis view ----------
-    def _build_analysis_view(self):
-        # Top: verdict + smart questions
-        verdict_frame = ctk.CTkFrame(self.content_frame, fg_color="#020617")
-        verdict_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 5))
+        # --- RIGHT PANEL: Chat ---
+        self._render_chat_interface(right_panel)
+
+    def _render_verdict_card(self, parent):
+        card = ctk.CTkFrame(parent, fg_color=COLORS["bg_card"], corner_radius=15)
+        card.pack(fill="x", pady=(0, 15))
+
+        # 1. Header
+        if self.current_analysis:
+            sev = self.current_analysis.severity
+            conf = self.current_analysis.confidence
+            
+            if "HIGH" in sev: color, icon = COLORS["accent_red"], "🚨"
+            elif "MED" in sev: color, icon = COLORS["accent_warn"], "⚠️"
+            else: color, icon = COLORS["accent_green"], "✅"
+        else:
+            sev, conf, color, icon = "NO DATA", 0.0, COLORS["text_dim"], "☁️"
+
+        # Badge
+        badge = ctk.CTkFrame(card, fg_color=color, height=40, corner_radius=10)
+        badge.pack(fill="x", padx=15, pady=15)
+        
+        ctk.CTkLabel(
+            badge, text=f"{icon}  {sev}", 
+            font=ctk.CTkFont(size=20, weight="bold"), text_color="#000000"
+        ).pack(pady=5)
+
+        # 2. Risk Meter
+        ctk.CTkLabel(card, text="Confidence Level", text_color=COLORS["text_dim"]).pack(anchor="w", padx=20, pady=(10,0))
+        
+        meter_frame = ctk.CTkFrame(card, fg_color="transparent")
+        meter_frame.pack(fill="x", padx=20, pady=(5, 15))
+        
+        progress = ctk.CTkProgressBar(meter_frame, height=12, progress_color=color)
+        progress.pack(fill="x", pady=5)
+        progress.set(conf)
+
+        # 3. Reasons List
+        if self.current_analysis:
+            ctk.CTkLabel(card, text="Detected Artifacts:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20)
+            for reason in self.current_analysis.reasons:
+                row = ctk.CTkFrame(card, fg_color="#182030", corner_radius=6)
+                row.pack(fill="x", padx=20, pady=2)
+                ctk.CTkLabel(row, text=f"• {reason}", text_color=COLORS["text_main"], anchor="w").pack(fill="x", padx=10, pady=5)
+        
+        # 4. Action Buttons
+        btn_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        btn_frame.pack(fill="x")
+        
+        ctk.CTkButton(
+            btn_frame, text="📸 Upload Screenshot", 
+            fg_color=COLORS["accent_blue"], hover_color="#2563eb",
+            command=self._upload_screenshot, height=45
+        ).pack(fill="x", pady=5)
 
         if self.current_analysis:
-            self._render_verdict_card(verdict_frame, self.current_analysis)
-            self._render_smart_questions(verdict_frame, self.current_analysis)
-        else:
-            lbl = ctk.CTkLabel(
-                verdict_frame,
-                text="No scan loaded yet. Upload a screenshot to begin.",
-                font=ctk.CTkFont(size=14),
-                text_color="#9ca3af",
-            )
-            lbl.pack(pady=12, anchor="w", padx=10)
+            self._render_smart_buttons(parent)
 
-        # Middle: chat log
-        self.chat_log_frame = ctk.CTkScrollableFrame(
-            self.content_frame, fg_color="#020617"
-        )
-        self.chat_log_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 10))
-        self.content_frame.grid_rowconfigure(2, weight=1)
+    def _render_smart_buttons(self, parent):
+        # Quick actions based on analysis
+        lbl = ctk.CTkLabel(parent, text="Smart Actions (ACTORS)", text_color=COLORS["text_dim"], font=ctk.CTkFont(size=12))
+        lbl.pack(anchor="w", pady=(15, 5))
 
-        self._add_message(
-            "🛡️ Guardian AI online. I’ll help you understand this page and stay safe.",
-            "#22c55e",
-        )
-        self._add_message(
-            "📸 Upload a screenshot or ask a question about the current analysis.",
-            "#9ca3af",
-        )
+        actions = ["Explain Analysis", "Show Raw HTTP Headers", "Generate Report"]
+        for action in actions:
+            ctk.CTkButton(
+                parent, text=f"⚡ {action}", 
+                fg_color="#1e293b", hover_color="#334155", 
+                border_width=1, border_color="#334155",
+                command=lambda a=action: self._handle_input(a)
+            ).pack(fill="x", pady=2)
 
-        # Bottom: input bar
-        input_frame = ctk.CTkFrame(self.content_frame, fg_color="#020617", height=70)
-        input_frame.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 20))
-        input_frame.grid_columnconfigure(1, weight=1)
-
-        upload_btn = ctk.CTkButton(
-            input_frame,
-            text="📸 Upload",
-            width=90,
-            height=48,
-            font=ctk.CTkFont(size=15, weight="bold"),
-            fg_color="#2563eb",
-            hover_color="#1d4ed8",
-            command=self._upload_screenshot,
-        )
-        upload_btn.grid(row=0, column=0, padx=10, pady=10, sticky="w")
-
+    def _render_chat_interface(self, parent):
+        # Chat Header
+        ctk.CTkLabel(parent, text="Guardian Assistant", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=15)
+        
+        # Scrollable Area
+        self.chat_scroll = ctk.CTkScrollableFrame(parent, fg_color="transparent")
+        self.chat_scroll.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        # Input Area
+        input_container = ctk.CTkFrame(parent, fg_color="#0b0f19", height=60)
+        input_container.pack(fill="x", padx=10, pady=10)
+        
         self.chat_entry = ctk.CTkEntry(
-            input_frame,
-            placeholder_text="Ask Guardian AI about this page...",
-            height=48,
-            font=ctk.CTkFont(size=14),
+            input_container, placeholder_text="Ask about the threat...", 
+            border_width=0, fg_color="#182030", height=45
         )
-        self.chat_entry.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
-        self.chat_entry.bind("<Return>", self._send_message)
+        self.chat_entry.pack(side="left", fill="x", expand=True, padx=5, pady=5)
+        self.chat_entry.bind("<Return>", lambda e: self._handle_input())
 
-        send_btn = ctk.CTkButton(
-            input_frame,
-            text="➤ Send",
-            width=90,
-            height=48,
-            fg_color="#22c55e",
-            hover_color="#16a34a",
-            font=ctk.CTkFont(size=15, weight="bold"),
-            command=self._send_message,
-        )
-        send_btn.grid(row=0, column=2, padx=10, pady=10, sticky="e")
+        ctk.CTkButton(
+            input_container, text="➤", width=50, height=45,
+            fg_color=COLORS["accent_blue"], command=self._handle_input
+        ).pack(side="right", padx=5)
 
-        # Feedback (appears only when we have an analysis)
-        self._render_feedback_row()
+        # Initial Message
+        self._add_chat_bubble("Guardian AI", "System initialized. Waiting for input artifact or query.", is_user=False)
 
-    def _render_verdict_card(self, parent: ctk.CTkFrame, analysis: AnalysisResult):
-        card = ctk.CTkFrame(parent, fg_color="#0f172a", corner_radius=10)
-        card.pack(fill="x", padx=5, pady=(8, 4))
-
-        # Icon + title
-        if "HIGH" in analysis.severity:
-            icon = "🚨 HIGH RISK"
-            color = "#ef4444"
-        elif "MEDIUM" in analysis.severity or "⚠️" in analysis.severity:
-            icon = "⚠️ Suspicious"
-            color = "#eab308"
-        else:
-            icon = "✅ Safe"
-            color = "#22c55e"
-
-        title = ctk.CTkLabel(
-            card,
-            text=f"{icon}   (confidence {analysis.confidence:.0%})",
-            font=ctk.CTkFont(size=18, weight="bold"),
-            text_color=color,
-        )
-        title.pack(anchor="w", padx=10, pady=(8, 4))
-
-        # Reasons
-        reasons_text = (
-            "\n".join(f"• {r}" for r in analysis.reasons) or "• No specific threats identified."
-        )
-        reasons_lbl = ctk.CTkLabel(
-            card,
-            text=reasons_text,
-            font=ctk.CTkFont(size=14),
-            text_color="#e5e7eb",
-            justify="left",
-        )
-        reasons_lbl.pack(anchor="w", padx=10, pady=(0, 6))
-
-        # Optional screenshot hint
-        if analysis.image_path and os.path.exists(analysis.image_path):
-            hint = ctk.CTkLabel(
-                card,
-                text=f"Screenshot: {os.path.basename(analysis.image_path)}",
-                font=ctk.CTkFont(size=12),
-                text_color="#9ca3af",
-            )
-            hint.pack(anchor="w", padx=10, pady=(0, 6))
-
-    def _render_smart_questions(self, parent: ctk.CTkFrame, analysis: AnalysisResult):
-        if not analysis.reasons:
-            return
-        self.smart_button_frame = ctk.CTkFrame(parent, fg_color="#020617")
-        self.smart_button_frame.pack(fill="x", padx=5, pady=(0, 6))
-
-        questions = {"What should I do next?", "How did you detect this?"}
-        for reason in analysis.reasons:
-            low = reason.lower()
-            if any(w in low for w in ["urgent", "now", "immediate"]):
-                questions.add("Why is the urgency tactic risky?")
-            if any(w in low for w in ["link", "url", "click"]):
-                questions.add("How can I safely check this link?")
-            if any(w in low for w in ["password", "login", "account"]):
-                questions.add("Why is it asking for my credentials?")
-
-        for q in list(questions)[:4]:
-            btn = ctk.CTkButton(
-                self.smart_button_frame,
-                text=q,
-                height=32,
-                fg_color="#111827",
-                hover_color="#1f2937",
-                text_color="#e5e7eb",
-                font=ctk.CTkFont(size=13),
-                command=lambda qq=q: self._ask_smart_question(qq),
-            )
-            btn.pack(side="left", padx=4, pady=4)
-
-    def _render_feedback_row(self):
-        if not self.current_analysis:
-            return
-        self.feedback_frame = ctk.CTkFrame(self.content_frame, fg_color="#020617")
-        self.feedback_frame.grid(row=4, column=0, sticky="ew", padx=20, pady=(0, 10))
-
-        label = ctk.CTkLabel(
-            self.feedback_frame,
-            text="Was this verdict accurate?",
-            font=ctk.CTkFont(size=13),
-            text_color="#9ca3af",
-        )
-        label.pack(side="left", padx=(5, 10))
-
-        buttons = [
-            ("✅ Correct", True, "#22c55e"),
-            ("❌ Missed threat", False, "#ef4444"),
-            ("⚠️ False alarm", False, "#eab308"),
-        ]
-        for text, is_correct, color in buttons:
-            b = ctk.CTkButton(
-                self.feedback_frame,
-                text=text,
-                height=30,
-                fg_color=color,
-                hover_color="#ffffff",
-                text_color="#020617",
-                font=ctk.CTkFont(size=12, weight="bold"),
-                command=lambda ok=is_correct, t=text: self._on_feedback(ok, t),
-            )
-            b.pack(side="left", padx=4, pady=4)
-
-    # ---------- other views ----------
-    def _build_pipeline_view(self):
-        frame = ctk.CTkFrame(self.content_frame, fg_color="#020617")
-        frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=20)
-
+    def _add_chat_bubble(self, sender, text, is_user=False):
+        bubble_color = "#2563eb" if is_user else "#1e293b"
+        align = "e" if is_user else "w" # East (right) or West (left)
+        
+        wrapper = ctk.CTkFrame(self.chat_scroll, fg_color="transparent")
+        wrapper.pack(fill="x", pady=4)
+        
+        # The Bubble
+        container = ctk.CTkFrame(wrapper, fg_color=bubble_color, corner_radius=12)
+        container.pack(side="right" if is_user else "left", anchor=align, padx=10)
+        
+        # Text
         ctk.CTkLabel(
-            frame,
-            text="ACTORS Pipeline",
-            font=ctk.CTkFont(size=30, weight="bold"),
-            text_color="#f97373",
-        ).pack(pady=(10, 20))
+            container, text=text, text_color="white", 
+            wraplength=400, justify="left", font=ctk.CTkFont(size=13)
+        ).pack(padx=12, pady=8)
+        
+        # Auto scroll
+        self.after(10, lambda: self.chat_scroll._parent_canvas.yview_moveto(1.0))
 
-        steps = [
-            "📸 Screenshot capture",
-            "🔍 YOLOv8 element detection",
-            "📝 OCR text extraction",
-            "🎯 Threat scoring (rules + ML)",
-            "🛡️ Guardian verdict",
-            "💭 Smart questions",
-            "👨‍🏫 Feedback → learning",
-        ]
-        for s in steps:
-            ctk.CTkLabel(
-                frame,
-                text=s,
-                font=ctk.CTkFont(size=18),
-                text_color="#e5e7eb",
-            ).pack(anchor="w", padx=20, pady=4)
-
-    def _build_actors_view(self):
-        frame = ctk.CTkFrame(self.content_frame, fg_color="#020617")
-        frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=20)
-
-        ctk.CTkLabel(
-            frame,
-            text="🔬 ACTORS Live Reasoning",
-            font=ctk.CTkFont(size=30, weight="bold"),
-            text_color="#f97373",
-        ).pack(pady=(10, 25))
-
-        desc = (
-            "This demo walks through Reason → Evaluate → Execute on a fake scan.\n"
-            "In your full build, this will replay the real decision trace for each verdict."
-        )
-        ctk.CTkLabel(
-            frame,
-            text=desc,
-            font=ctk.CTkFont(size=14),
-            text_color="#9ca3af",
-            justify="left",
-        ).pack(pady=(0, 20))
-
-        demo_btn = ctk.CTkButton(
-            frame,
-            text="▶️ Run ACTORS demo",
-            height=60,
-            width=260,
-            fg_color="#22c55e",
-            hover_color="#16a34a",
-            font=ctk.CTkFont(size=20, weight="bold"),
-            command=self._run_actors_demo,
-        )
-        demo_btn.pack(pady=10)
-
-    def _build_learning_view(self):
-        frame = ctk.CTkFrame(self.content_frame, fg_color="#020617")
-        frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=20)
-
-        ctk.CTkLabel(
-            frame,
-            text="🧠 Guardian AI Learning",
-            font=ctk.CTkFont(size=30, weight="bold"),
-            text_color="#e5e7eb",
-        ).pack(pady=(10, 25))
-
-        acc = mock_calculate_accuracy()
-        ctk.CTkLabel(
-            frame,
-            text=f"🎯 Current accuracy: {acc:.1%}",
-            font=ctk.CTkFont(size=36, weight="bold"),
-            text_color="#22c55e",
-        ).pack(pady=10)
-
-        btn_row = ctk.CTkFrame(frame, fg_color="transparent")
-        btn_row.pack(pady=30)
-
-        graph_btn = ctk.CTkButton(
-            btn_row,
-            text="📊 Show learning curve",
-            height=70,
-            width=280,
-            fg_color="#2563eb",
-            hover_color="#1d4ed8",
-            font=ctk.CTkFont(size=20, weight="bold"),
-            command=self._show_learning_graph,
-        )
-        graph_btn.pack(side="left", padx=10)
-
-        train_btn = ctk.CTkButton(
-            btn_row,
-            text="👨‍🏫 Open training view",
-            height=70,
-            width=280,
-            fg_color="#22c55e",
-            hover_color="#16a34a",
-            font=ctk.CTkFont(size=20, weight="bold"),
-            command=self._show_training,
-        )
-        train_btn.pack(side="left", padx=10)
-
-    # ==============================================================================
-    #                          CHAT + EVENTS + HELPERS
-    # ==============================================================================
-    def _add_message(self, text: str, color: str = "#e5e7eb"):
-        if not self.chat_log_frame:
-            return
-        frame = ctk.CTkFrame(self.chat_log_frame, fg_color="transparent")
-        frame.pack(fill="x", padx=10, pady=4)
-        lbl = ctk.CTkLabel(
-            frame,
-            text=text,
-            font=ctk.CTkFont(size=14),
-            text_color=color,
-            justify="left",
-            wraplength=800,
-        )
-        lbl.pack(anchor="w")
-        self.chat_log_frame._parent_canvas.yview_moveto(1.0)
-
-    def _send_message(self, event=None):
-        if not self.chat_entry or self.is_loading_ai:
-            return
-        text = self.chat_entry.get().strip()
-        if not text:
-            return
-        self.chat_entry.delete(0, "end")
-        self._add_message(f"👤 You: {text}", "#60a5fa")
-        self.is_loading_ai = True
-        self._add_message("🤖 Guardian AI: 🔄 Analyzing...", "#fbbf24")
+    def _handle_input(self, text_override=None):
+        text = text_override or self.chat_entry.get().strip()
+        if not text: return
+        
+        self.chat_entry.delete(0, 'end')
+        self._add_chat_bubble("You", text, is_user=True)
+        
+        self.status_indicator.configure(text="● PROCESSING...", text_color=COLORS["accent_warn"])
+        
+        # Threaded processing
         threading.Thread(
-            target=self._run_ai_thread, args=(text,), daemon=True
+            target=lambda: self.ai_queue.put(MockEngine.get_ai_response(text, self.current_analysis)),
+            daemon=True
         ).start()
 
-    def _ask_smart_question(self, q: str):
-        if not self.chat_entry:
-            return
-        self._add_message(f"👤 You: {q}", "#60a5fa")
-        self.is_loading_ai = True
-        self._add_message("🤖 Guardian AI: 🔄 Analyzing...", "#fbbf24")
-        threading.Thread(
-            target=self._run_ai_thread, args=(q,), daemon=True
-        ).start()
-
-    def _run_ai_thread(self, query: str):
-        resp = mock_ai_response(query, self.current_analysis)
-        self.ai_response_queue.put(resp)
-        self.is_loading_ai = False
-
-    def _upload_screenshot(self):
-        path = filedialog.askopenfilename(
-            filetypes=[("Images", "*.png *.jpg *.jpeg *.webp")]
-        )
-        if not path:
-            return
-        # In your full build, you’d send this to the engine and get real severity/reasons.
-        self.current_analysis = AnalysisResult(
-            severity="⚠️ MEDIUM RISK",
-            reasons=["Detected login form", "Contains external link", "Unusual sender"],
-            image_path=path,
-            confidence=0.82,
-        )
-        messagebox.showinfo(
-            "Guardian AI",
-            "Screenshot loaded. Reopening Analysis view with updated verdict.",
-        )
-        self.show_analysis_view()
-
-    def _on_feedback(self, was_correct: bool, label: str):
-        if not self.current_analysis:
-            return
-        mock_record_feedback(
-            was_correct, self.current_analysis.confidence, self.current_analysis.severity
-        )
-        self._add_message(f"✅ Feedback received: {label}", "#9ca3af")
-        # Disable buttons after one click
-        if self.feedback_frame:
-            for child in self.feedback_frame.winfo_children():
-                if isinstance(child, ctk.CTkButton):
-                    child.configure(state="disabled")
-
-    def _run_actors_demo(self):
-        messagebox.showinfo(
-            "ACTORS Demo",
-            "Reason → Evaluate → Execute demo.\n\nIn your full build, this will replay the actual decision trace.",
-        )
-
-    def _show_learning_graph(self):
-        x = np.arange(1, 26)
-        base = 0.6 + 0.015 * x
-        noise = np.random.normal(0, 0.015, size=x.shape).cumsum()
-        y = np.clip(base + noise, 0.4, 1.0)
-
-        fig, ax = plt.subplots(figsize=(10, 6), facecolor="#020617")
-        ax.set_facecolor("#020617")
-        ax.plot(x, y, "o-", color="#22c55e", linewidth=3, markersize=8)
-        ax.fill_between(x, y, 0.4, color="#22c55e", alpha=0.25)
-        ax.set_ylim(0.4, 1.02)
-        ax.set_xlabel("Feedback events", color="white", fontsize=12)
-        ax.set_ylabel("Estimated accuracy", color="white", fontsize=12)
-        ax.set_title("Guardian AI learning over time", color="white", fontsize=16)
-        ax.tick_params(colors="white")
-        ax.grid(True, alpha=0.3)
-
-        win = ctk.CTkToplevel(self)
-        win.title("Learning curve")
-        win.geometry("900x600")
-        canvas = FigureCanvasTkAgg(fig, master=win)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
-        plt.close(fig)
-
-    def _show_training(self):
-        win = ctk.CTkToplevel(self)
-        win.title("Training interface")
-        win.geometry("700x500")
-        ctk.CTkLabel(
-            win,
-            text="Here you’ll add labeled examples and corrections.\nIn the full build this will write to your training/feedback store.",
-            font=ctk.CTkFont(size=16),
-            justify="left",
-        ).pack(expand=True, padx=20, pady=40)
-
-    def _check_ai_response_queue(self):
+    def _process_ai_queue(self):
         try:
             while True:
-                resp = self.ai_response_queue.get_nowait()
-                self._add_message(f"🤖 Guardian AI: {resp}", "#e5e7eb")
+                response = self.ai_queue.get_nowait()
+                self._add_chat_bubble("Guardian AI", response, is_user=False)
+                self.status_indicator.configure(text="● SYSTEM READY", text_color=COLORS["accent_green"])
         except queue.Empty:
             pass
-        self.after(120, self._check_ai_response_queue)
+        self.after(100, self._process_ai_queue)
 
-# ==============================================================================
-#                               ENTRY POINT
-# ==============================================================================
+    def _upload_screenshot(self):
+        path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg")])
+        if path:
+            # Mocking analysis result based on random chance for demo
+            is_bad = random.choice([True, False])
+            self.current_analysis = AnalysisResult(
+                severity="HIGH RISK" if is_bad else "✅ SAFE",
+                reasons=["Suspicious IFRAME detected", "Homograph URL match"] if is_bad else ["Valid SSL", "Domain whitelist"],
+                image_path=path,
+                confidence=random.uniform(0.75, 0.99)
+            )
+            self.show_view_analysis() # Refresh view
+            self._add_chat_bubble("System", f"Image uploaded. Analysis complete: {self.current_analysis.severity}", is_user=False)
 
-def parse_cli_args() -> AnalysisResult | None:
-    """
-    Tray calls: python phisher_ai_gui.py "<severity>" "<reasons>|..." "<image_path>"
-    Returns an AnalysisResult built from those args, or None if not provided.
-    """
-    if len(sys.argv) == 4:
-        severity = sys.argv[1]
-        reasons_raw = sys.argv[2]
-        image_path = sys.argv[3]
+    # ==============================================================================
+    #                               VIEW: PIPELINE
+    # ==============================================================================
 
-        reasons = reasons_raw.split("|") if reasons_raw else []
-        return AnalysisResult(
-            severity=severity,
-            reasons=reasons,
-            image_path=image_path,
-            confidence=0.85,
+    def show_view_pipeline(self):
+        container = ctk.CTkFrame(self.main_content, fg_color="transparent")
+        container.pack(expand=True, fill="both", padx=50)
+
+        ctk.CTkLabel(container, text="ACTORS Processing Pipeline", font=ctk.CTkFont(size=24, weight="bold")).pack(pady=20)
+
+        # Visual Flow
+        steps = [
+            ("📸 Input Layer", "Capture & Pre-processing"),
+            ("👁️ Vision (YOLOv8)", "Object Detection (Logos, Forms)"),
+            ("📝 Text (Tesseract)", "OCR & NLP Analysis"),
+            ("🧠 Reasoner (LLM)", "Contextual Threat Scoring"),
+            ("🛡️ Verdict", "Final Policy Execution")
+        ]
+
+        for i, (title, sub) in enumerate(steps):
+            # Card
+            step_frame = ctk.CTkFrame(container, fg_color=COLORS["bg_card"], border_width=1, border_color=COLORS["accent_blue"])
+            step_frame.pack(fill="x", pady=5)
+            
+            ctk.CTkLabel(step_frame, text=f"Step 0{i+1}", text_color=COLORS["accent_blue"], font=ctk.CTkFont(weight="bold")).pack(side="left", padx=20)
+            
+            info = ctk.CTkFrame(step_frame, fg_color="transparent")
+            info.pack(side="left", padx=10)
+            ctk.CTkLabel(info, text=title, font=ctk.CTkFont(size=16, weight="bold"), anchor="w").pack(fill="x")
+            ctk.CTkLabel(info, text=sub, text_color=COLORS["text_dim"], anchor="w").pack(fill="x")
+            
+            # Arrow
+            if i < len(steps) - 1:
+                ctk.CTkLabel(container, text="⬇", font=ctk.CTkFont(size=20), text_color=COLORS["text_dim"]).pack()
+
+    # ==============================================================================
+    #                               VIEW: ACTORS (Reasoning)
+    # ==============================================================================
+
+    def show_view_actors(self):
+        # Terminal-style visualization
+        container = ctk.CTkFrame(self.main_content, fg_color=COLORS["bg_card"], corner_radius=10)
+        container.pack(expand=True, fill="both")
+
+        header = ctk.CTkFrame(container, height=40, fg_color="#1e1e1e")
+        header.pack(fill="x")
+        ctk.CTkLabel(header, text="  >_ ACTORS LIVE TRACE", font=ctk.CTkFont(family="Consolas"), text_color=COLORS["accent_green"]).pack(side="left")
+
+        # Console Output
+        self.console_box = ctk.CTkTextbox(container, font=ctk.CTkFont(family="Consolas", size=14), fg_color="#000000", text_color="#00ff00")
+        self.console_box.pack(fill="both", expand=True, padx=5, pady=5)
+        self.console_box.insert("end", "Waiting for trigger...\n")
+        self.console_box.configure(state="disabled")
+
+        btn = ctk.CTkButton(
+            self.main_content, text="▶ EXECUTE SIMULATION", 
+            fg_color=COLORS["accent_green"], text_color="black",
+            font=ctk.CTkFont(weight="bold"),
+            command=self._run_actors_simulation
         )
-    return None
+        btn.pack(pady=20)
 
+    def _run_actors_simulation(self):
+        self.console_box.configure(state="normal")
+        self.console_box.delete("1.0", "end")
+        
+        def type_line(text, color_tag=None):
+            self.console_box.insert("end", f"{text}\n")
+            self.console_box.see("end")
+            time.sleep(random.uniform(0.3, 0.8))
+
+        def run_thread():
+            trace = MockEngine.generate_actors_trace()
+            type_line("[INIT] Loading ACTORS Modules...", "sys")
+            time.sleep(1)
+            for stage, msg in trace:
+                type_line(f"[{stage}] {msg}")
+            type_line("[COMPLETE] Trace finished.")
+            self.console_box.configure(state="disabled")
+
+        threading.Thread(target=run_thread, daemon=True).start()
+
+    # ==============================================================================
+    #                               VIEW: LEARNING
+    # ==============================================================================
+
+    def show_view_learning(self):
+        container = ctk.CTkFrame(self.main_content, fg_color="transparent")
+        container.pack(expand=True, fill="both")
+
+        ctk.CTkLabel(container, text="Model Performance Metrics", font=ctk.CTkFont(size=20, weight="bold")).pack(pady=(0, 20))
+
+        # Generate Plot
+        fig, ax = plt.subplots(figsize=(10, 5), facecolor=COLORS["bg_card"])
+        ax.set_facecolor(COLORS["bg_card"])
+        
+        # Fake Data
+        x = np.linspace(0, 50, 50)
+        y = 0.5 + 0.4 * (1 - np.exp(-0.1 * x)) + np.random.normal(0, 0.02, 50)
+        
+        # Plot styling
+        ax.plot(x, y, color=COLORS["accent_blue"], linewidth=2, label="Accuracy")
+        ax.fill_between(x, y, 0, color=COLORS["accent_blue"], alpha=0.1)
+        
+        ax.set_title("Reinforcement Learning Curve", color=COLORS["text_main"])
+        ax.set_xlabel("Epochs", color=COLORS["text_dim"])
+        ax.set_ylabel("Precision", color=COLORS["text_dim"])
+        ax.spines['bottom'].set_color(COLORS["text_dim"])
+        ax.spines['left'].set_color(COLORS["text_dim"])
+        ax.tick_params(axis='x', colors=COLORS["text_dim"])
+        ax.tick_params(axis='y', colors=COLORS["text_dim"])
+        ax.grid(color="#334155", linestyle='--', linewidth=0.5, alpha=0.5)
+
+        canvas = FigureCanvasTkAgg(fig, master=container)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
+        # Stats Row
+        stats = ctk.CTkFrame(container, fg_color="transparent")
+        stats.pack(fill="x", pady=20)
+        
+        for label, val in [("Accuracy", "94.2%"), ("False Positives", "1.2%"), ("Samples", "14,203")]:
+            f = ctk.CTkFrame(stats, fg_color=COLORS["bg_card"])
+            f.pack(side="left", expand=True, fill="x", padx=5)
+            ctk.CTkLabel(f, text=label, text_color=COLORS["text_dim"]).pack(pady=(10,0))
+            ctk.CTkLabel(f, text=val, font=ctk.CTkFont(size=22, weight="bold")).pack(pady=(0,10))
+
+# ==============================================================================
+#                                ENTRY POINT
+# ==============================================================================
 
 if __name__ == "__main__":
-    initial = parse_cli_args()
-    app = GuardianAI(initial_analysis=initial)
+    # Check for CLI args (simulating integration with a backend script)
+    initial_data = None
+    if len(sys.argv) == 4:
+        initial_data = AnalysisResult(
+            severity=sys.argv[1],
+            reasons=sys.argv[2].split("|"),
+            image_path=sys.argv[3]
+        )
+
+    app = GuardianAI(initial_analysis=initial_data)
     app.mainloop()

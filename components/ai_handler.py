@@ -13,7 +13,7 @@ import time
 # // ============================================================================
 
 # --- User-provided API Key ---
-API_KEY = "AIzaSyBEelzO00KvkXLg3hqP-wsdCCKO6glZ0S8" 
+API_KEY = "AIzaSyCAgjvnB0lF0K7iON4PUwV8Jjdyo4YLPCc" 
 
 API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={API_KEY}"
 
