@@ -1,0 +1,164 @@
+[
+  {
+    "timestamp": "2025-11-29T20:28:03.824460",
+    "was_correct": true,
+    "confidence": 0.8,
+    "threat_level": "\u26a0\ufe0f MEDIUM RISK"
+  },
+  {
+    "timestamp": "2025-11-29T20:57:49.797217",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "\u2705 SAFE"
+  },
+  {
+    "timestamp": "2025-11-29T21:04:04.196017",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "\u2705 SAFE"
+  },
+  {
+    "timestamp": "2025-11-29T21:04:57.073195",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "low"
+  },
+  {
+    "timestamp": "2025-11-29T22:20:27.189852",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "\u2705 SAFE"
+  },
+  {
+    "timestamp": "2025-11-29T22:23:24.868946",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "\u2705 SAFE"
+  },
+  {
+    "timestamp": "2025-11-29T22:29:14.927685",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "\u2705 SAFE"
+  },
+  {
+    "timestamp": "2025-11-29T22:38:00.865511",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "\u2705 SAFE"
+  },
+  {
+    "timestamp": "2025-11-29T23:02:01.938311",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "\u2705 SAFE"
+  },
+  {
+    "timestamp": "2025-11-29T23:02:35.282172",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "low"
+  },
+  {
+    "timestamp": "2025-11-29T23:20:46.875869",
+    "was_correct": true,
+    "confidence": 0.8,
+    "threat_level": "\u26a0\ufe0f MEDIUM RISK"
+  },
+  {
+    "timestamp": "2025-11-29T23:21:30.806334",
+    "was_correct": true,
+    "confidence": 0.2833333333333333,
+    "threat_level": "low"
+  },
+  {
+    "timestamp": "2025-11-29T23:28:56.232172",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "\u2705 SAFE"
+  },
+  {
+    "timestamp": "2025-11-29T23:30:44.536843",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "\u2705 SAFE"
+  },
+  {
+    "timestamp": "2025-11-29T23:36:14.571790",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "\u2705 SAFE"
+  },
+  {
+    "timestamp": "2025-11-29T23:37:59.052716",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "\u2705 SAFE"
+  },
+  {
+    "timestamp": "2025-11-29T23:49:56.044547",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "\u2705 SAFE"
+  },
+  {
+    "timestamp": "2025-11-30T00:02:44.747350",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "\u2705 SAFE"
+  },
+  {
+    "timestamp": "2025-11-30T00:04:40.545436",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "\u2705 SAFE"
+  },
+  {
+    "timestamp": "2025-11-30T01:05:56.223461",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "\u2705 SAFE"
+  },
+  {
+    "timestamp": "2025-11-30T01:06:23.150936",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "\u2705 SAFE"
+  },
+  {
+    "timestamp": "2025-11-30T01:06:43.853245",
+    "was_correct": true,
+    "confidence": 0.8,
+    "threat_level": "\u26a0\ufe0f MEDIUM RISK"
+  },
+  {
+    "timestamp": "2025-11-30T11:43:17.605522",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "\u2705 SAFE"
+  },
+  {
+    "timestamp": "2025-11-30T11:48:07.868589",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "\u2705 SAFE"
+  },
+  {
+    "timestamp": "2025-11-30T11:48:50.367187",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "\u2705 SAFE"
+  },
+  {
+    "timestamp": "2025-11-30T11:49:07.943788",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "\u2705 SAFE"
+  },
+  {
+    "timestamp": "2025-11-30T11:49:40.381774",
+    "was_correct": true,
+    "confidence": 0.2,
+    "threat_level": "\u2705 SAFE"
+  }
+]

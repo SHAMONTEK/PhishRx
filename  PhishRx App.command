@@ -1,15 +1,25 @@
 #!/bin/zsh
 cd "$(dirname "$0")"
 
-# Activate virtual environment
+echo "=== Activating Virtual Environment ==="
 source venv/bin/activate
 
-# Launch PHISH-ER main app in the background
+echo "=== Installing Core Dependencies ==="
+pip install torch transformers Pillow opencv-python
+pip install -r requirements.txt
+pip install accelerate>=0.26.0
+echo "=== Setting Up Guardian AI Models ==="
+# Create models directory
+mkdir -p models
+
+# Download models in background (non-blocking)
+python3 -c "
+from components.guardian_vision import GuardianVision
+print('✅ Vision system pre-loaded successfully')
+" &
+
+echo "=== Launching GUARDIAN AI ==="
 python3 phisher_lite.py &
 
-# Launch tray icon (menu bar app) in the background
-
-
-echo ""
-echo "=== PHISH-ER + Tray launched. Press ENTER to close this window. ==="
+echo "=== System ready! Press ENTER to close ==="
 read

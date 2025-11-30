@@ -1,675 +1,625 @@
-# phisher_ai_gui.py # <-- Renamed file comment
+#!/usr/bin/env python3
+# ==== GUARDIAN AI – ACTORS GUI =================================================
+# Single-file GUI with:
+# - Top nav (Analysis / Pipeline / ACTORS / Learning)
+# - Verdict card + screenshot (if provided)
+# - Smart ACTORS question buttons
+# - Feedback buttons
+# - Learning and ACTORS views
+# ==============================================================================
+
 import customtkinter as ctk
-from datetime import datetime
+from tkinter import filedialog, messagebox
+import tkinter as tk
 import os
 import sys
-import re
 import threading
 import queue
-import tkinter # For PhotoImage and TclError
+from datetime import datetime
+import numpy as np
+import matplotlib
+matplotlib.use("TkAgg")
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-# --- Import Utilities ---
-# Import the external utils module
-try:
-    import utils
-except ImportError:
-    print("❌ FATAL ERROR: utils.py not found. Please ensure it's in the same directory.")
-    sys.exit(1)
-except Exception as e:
-     print(f"❌ FATAL ERROR: Failed to import utils.py: {e}")
-     sys.exit(1)
-
-
-# --- Import Components ---
-# Import actual components now, assuming they exist in a 'components' directory
-try:
-    from components import ai_handler
-    from components import scan_logger
-    from components import question_buttons
-    from components import threat_breakdown
-    from components import security_center
-except ImportError as e:
-    print(f"❌ ERROR importing components: {e}")
-    print("Ensure 'components' directory exists and contains required .py files.")
-    # Fallback to placeholders if import fails, allowing basic UI to run
-    # Define simple placeholder classes if components fail to import
-    class MockAIHandler:
-        @staticmethod
-        def get_ai_response(user_input, reasons, severity, ocr_text):
-            print(f"MockAIHandler: Received query '{user_input}'")
-            return f"Mock AI Response for '{user_input}' (Severity: {severity})"
-    class MockScanLogger:
-        @staticmethod
-        def save_scan_to_csv(timestamp, severity, reasons, image_path, ocr_text):
-            print(f"MockScanLogger: Save scan - {timestamp}, {severity}")
-        @staticmethod
-        def load_scan_history(): return []
-        @staticmethod
-        def delete_scan_history_item(timestamp): return True
-    class MockQuestionButtons:
-        @staticmethod
-        def create_smart_question_buttons(parent_frame, button_click_callback, window_width):
-             print("MockQuestionButtons: Creating buttons")
-             button_frame = ctk.CTkFrame(parent_frame, fg_color="transparent")
-             btn = ctk.CTkButton(button_frame, text="Mock Button")
-             btn.pack()
-             return button_frame, [btn] # Return frame and list
-    class MockThreatBreakdown:
-        @staticmethod
-        def create_threat_breakdown_section(parent_frame, flagged_items):
-             print(f"MockThreatBreakdown: Displaying {len(flagged_items)} items")
-             label_text = "Threat Breakdown (Mock)"
-             if flagged_items:
-                  label_text += f"\n- {flagged_items[0][1]}" # Show first reason
-             ctk.CTkLabel(parent_frame, text=label_text).pack()
-    class MockSecurityCenter:
-         @staticmethod
-         def create_security_center_tab(parent_frame):
-              print("MockSecurityCenter: Creating tab")
-              frame = ctk.CTkFrame(parent_frame, fg_color=utils.COLOR_CARD)
-              ctk.CTkLabel(frame, text="Security Center (Mock)").pack()
-              return frame
-
-    ai_handler = MockAIHandler
-    scan_logger = MockScanLogger
-    question_buttons = MockQuestionButtons
-    threat_breakdown = MockThreatBreakdown
-    security_center = MockSecurityCenter
-
-
-# --- Main Application Class ---
-class PhishRxApp(ctk.CTk): # <-- Renamed class
-
-    def __init__(self, severity, reasons, image_path):
-        super().__init__()
-
-        # Store initial data
+# ----------------- Simple data holder -----------------
+class AnalysisResult:
+    def __init__(self, severity="✅ SAFE", reasons=None, image_path=None, confidence=0.85):
         self.severity = severity
-        # Note: 'reasons' passed here might be initial placeholder.
-        # Actual reasons are determined by find_suspicious_text below.
-        self.initial_reasons_placeholder = reasons
+        self.reasons = reasons or []
         self.image_path = image_path
+        self.confidence = confidence
+        self.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # Initialize state variables
-        self.ocr_text = ""
-        self.flagged_items = [] # Store results from utils.find_suspicious_text -> list of (phrase, reason_label)
-        self.reasons_for_ai = [] # Store just the reason labels for the AI prompt
-        self.smart_buttons_widgets = []
-        self.is_loading = False
-        self.response_queue = queue.Queue()
-        self.logo_image = None # CTkImage for UI logo
-        self.last_ai_response = "" # Potentially store fuller AI response
-        self.last_ai_summary = "" # Store summary shown in label
-        self.progress_bar = None
-        self.ai_summary_label = None
-        self.dashboard_frame = None # Reference to the main dashboard frame
-        self.security_center_frame = None # Reference to the security center frame
+# ----------------- Mock “engine” hooks -----------------
+def mock_ai_response(query, analysis: AnalysisResult | None):
+    if analysis and "HIGH" in analysis.severity:
+        return "🚨 This looks dangerous. Do NOT click links or enter credentials."
+    if "safe" in query.lower():
+        return "✅ This appears safe based on the current information."
+    return "🔍 No immediate threats detected, but stay cautious."
 
-        # --- Basic Window Setup ---
-        self.title("PhishRx") # <-- Renamed window title
-        # --- Set Application Icon ---
-        try:
-            # Consider renaming icon file too, e.g., phishrx_icon.png
-            icon_path = "phishrx_icon.png" # <-- Potentially rename icon file
-            if not os.path.exists(icon_path):
-                 icon_path = "phisher_icon.png" # Fallback to old name if new one doesn't exist yet
+def mock_record_feedback(was_correct: bool, confidence: float, severity: str):
+    # Here you’d call your real analytics.record_scan_result(...)
+    pass
 
-            if os.path.exists(icon_path):
-                 # Use tkinter.PhotoImage for the window icon (taskbar/dock)
-                 icon_image = tkinter.PhotoImage(file=icon_path)
-                 self.iconphoto(True, icon_image)
-                 print(f"✅ Successfully set application icon from: {icon_path}")
-                 # Load CTkImage for use in the UI later using utils function
-                 self.logo_image = utils.load_ctk_image(icon_path, size=(32, 32))
-                 if not self.logo_image:
-                      print("⚠️ Logo image not loaded for UI (PIL unavailable or error).")
-            else:
-                 print(f"⚠️ Warning: Icon file not found at '{icon_path}' or fallback. Using default icon.")
-        except Exception as e:
-            print(f"⚠️ Warning: Could not set application icon or load logo. Error: {e}")
+def mock_calculate_accuracy():
+    # Replace with analytics.calculate_accuracy()
+    return 0.86 + np.random.random() * 0.05
 
-        # --- Window Geometry ---
-        screen_width = self.winfo_screenwidth()
-        screen_height = self.winfo_screenheight()
-        self.win_width = 800
-        self.win_height = 750 # Adjusted height
-        x = max(0, (screen_width // 2) - (self.win_width // 2))
-        y = max(0, (screen_height // 2) - (self.win_height // 2))
-        self.geometry(f"{self.win_width}x{self.win_height}+{x}+{y}")
-        self.minsize(750, 700) # Adjusted min size
+# ==============================================================================
+#                                GUI CLASS
+# ==============================================================================
+class GuardianAI(ctk.CTk):
+    def __init__(self, initial_analysis: AnalysisResult | None = None):
+        super().__init__()
+        self.current_analysis = initial_analysis
+        self.ai_response_queue: queue.Queue[str] = queue.Queue()
+        self.is_loading_ai = False
 
-        # --- Apply Dark Theme ---
-        ctk.set_appearance_mode("dark") # Set dark mode
-        self.configure(fg_color=utils.COLOR_BACKGROUND)
+        self.chat_log_frame: ctk.CTkScrollableFrame | None = None
+        self.chat_entry: ctk.CTkEntry | None = None
+        self.smart_button_frame: ctk.CTkFrame | None = None
+        self.feedback_frame: ctk.CTkFrame | None = None
 
-        # --- Perform OCR & Initial Analysis ---
-        # Ensure image_path exists before proceeding
-        if not os.path.exists(self.image_path):
-             print(f"❌ ERROR: Screenshot image path does not exist: {self.image_path}")
-             # Display error in UI instead of just printing
-             self.ocr_text = f"Error: Screenshot file not found at\n{self.image_path}"
-             self.flagged_items = []
-             self.severity = "Error" # Set severity to Error
-        else:
-             self.ocr_text = utils.perform_ocr(self.image_path)
-             # Use the find_suspicious_text function from utils
-             self.flagged_items = utils.find_suspicious_text(self.ocr_text)
-             # Extract just the reasons/labels for the AI prompt and display
-             self.reasons_for_ai = [label for _, label in self.flagged_items]
-             # Optional: Update severity based on OCR/flagged items if initial was "Unknown"
-             if self.severity == "Unknown":
-                  if len(self.flagged_items) >= 3: self.severity = "High"
-                  elif len(self.flagged_items) > 0: self.severity = "Medium"
-                  else: self.severity = "Low" # Or "Safe" if OCR text is very short/benign
+        self._setup_window()
+        self._setup_header()
+        self._setup_content()
+        self._setup_navigation()
 
-        # --- Log Scan ---
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        # Use the extracted reasons for logging
-        scan_logger.save_scan_to_csv(timestamp, self.severity, self.reasons_for_ai, self.image_path, self.ocr_text)
+        self.after(100, self.show_analysis_view)
+        self.after(150, self._check_ai_response_queue)
 
-        # --- Main Structure ---
+    # ---------- window + header ----------
+    def _setup_window(self):
+        self.title("🛡️ GUARDIAN AI – PhishRx")
+        self.geometry("1100x800")
+        self.minsize(950, 700)
+        ctk.set_appearance_mode("dark")
+        self.configure(fg_color="#0b1015")
+
+    def _setup_header(self):
+        header = ctk.CTkFrame(self, height=70, corner_radius=0, fg_color="#020817")
+        header.grid(row=0, column=0, sticky="ew")
+        header.grid_columnconfigure(0, weight=1)
+
+        title = ctk.CTkLabel(
+            header,
+            text="🛡️ GUARDIAN AI",
+            font=ctk.CTkFont(size=28, weight="bold"),
+            text_color="#f97373",
+        )
+        title.grid(row=0, column=0, padx=30, pady=18, sticky="w")
+
+        self.status_label = ctk.CTkLabel(
+            header,
+            text="Status: Ready",
+            font=ctk.CTkFont(size=14),
+            text_color="#22c55e",
+        )
+        self.status_label.grid(row=0, column=1, padx=20, pady=18, sticky="e")
+
+    def _setup_content(self):
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1) # Make content area expand
-
-        # --- Top Navigation Frame ---
-        self.nav_frame = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
-        self.nav_frame.grid(row=0, column=0, sticky="ew", padx=20, pady=(10, 5))
-        self.nav_frame.grid_columnconfigure(0, weight=0) # Logo
-        self.nav_frame.grid_columnconfigure(1, weight=1) # Title
-        self.nav_frame.grid_columnconfigure(2, weight=0) # Buttons
-
-        # Logo
-        if self.logo_image and isinstance(self.logo_image, ctk.CTkImage): # Check if it's a CTkImage
-            logo_label = ctk.CTkLabel(self.nav_frame, image=self.logo_image, text="")
-            logo_label.grid(row=0, column=0, sticky="w", padx=(0, 10))
-        else:
-             # Fallback text/placeholder if image loading failed
-             ctk.CTkLabel(self.nav_frame, text="Rx", font=("Arial", 24, "bold"), text_color=utils.COLOR_TEXT_ACCENT).grid(row=0, column=0, sticky="w", padx=(0, 10)) # Changed placeholder
-
-        # Title
-        self.title_label = ctk.CTkLabel(self.nav_frame, text="PhishRx", font=utils.TITLE_FONT, text_color=utils.COLOR_TEXT_ACCENT) # <-- Renamed Title Label
-        self.title_label.grid(row=0, column=1, sticky="w", padx=5)
-
-        # Tab Buttons
-        self.tab_buttons_frame = ctk.CTkFrame(self.nav_frame, fg_color="transparent")
-        self.tab_buttons_frame.grid(row=0, column=2, sticky="e")
-        self.dashboard_button = ctk.CTkButton(self.tab_buttons_frame, text="Dashboard", command=self.show_dashboard_frame,
-                                              font=utils.BUTTON_FONT, fg_color="transparent", hover=False,
-                                              text_color=utils.COLOR_TEXT_SECONDARY, width=100)
-        self.dashboard_button.grid(row=0, column=0, padx=(0, 10))
-        self.security_center_button = ctk.CTkButton(self.tab_buttons_frame, text="Security", command=self.show_security_center_frame,
-                                                   font=utils.BUTTON_FONT, fg_color="transparent", hover=False,
-                                                   text_color=utils.COLOR_TEXT_SECONDARY, width=100)
-        self.security_center_button.grid(row=0, column=1)
-
-        # --- Content Frame ---
-        self.content_frame = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
-        self.content_frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=(10, 20))
-        self.content_frame.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+        self.content_frame = ctk.CTkFrame(self, fg_color="#020617", corner_radius=0)
+        self.content_frame.grid(row=1, column=0, sticky="nsew")
         self.content_frame.grid_columnconfigure(0, weight=1)
+        self.content_frame.grid_rowconfigure(1, weight=1)
 
-        # --- Build Initial View ---
-        self.show_dashboard_frame() # Show dashboard by default
+    # ---------- navigation ----------
+    def _setup_navigation(self):
+        nav_frame = ctk.CTkFrame(self.content_frame, fg_color="#0f172a", height=58)
+        nav_frame.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
+        nav_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
 
-        # --- Start checking the queue ---
-        self.after(100, self._check_response_queue)
+        tabs = [
+            ("📱 Analysis", self.show_analysis_view),
+            ("⚙️ Pipeline", self.show_pipeline_view),
+            ("🔬 ACTORS", self.show_actors_view),
+            ("📊 Learning", self.show_learning_view),
+        ]
+        self._nav_buttons = []
+        for i, (label, callback) in enumerate(tabs):
+            btn = ctk.CTkButton(
+                nav_frame,
+                text=label,
+                height=44,
+                font=ctk.CTkFont(size=16, weight="bold"),
+                fg_color="#1f2937" if i == 0 else "transparent",
+                text_color="#e5e7eb" if i == 0 else "#9ca3af",
+                hover_color="#1d4ed8",
+                command=lambda cb=callback, idx=i: self._on_tab_click(idx, cb),
+            )
+            btn.grid(row=0, column=i, padx=4, pady=7, sticky="ew")
+            self._nav_buttons.append(btn)
 
-        # --- Force focus on startup ---
-        self.after(200, lambda: utils.force_window_focus(self)) # Delay focus slightly
+    def _on_tab_click(self, index: int, callback):
+        for i, btn in enumerate(self._nav_buttons):
+            if i == index:
+                btn.configure(fg_color="#1f2937", text_color="#e5e7eb")
+            else:
+                btn.configure(fg_color="transparent", text_color="#9ca3af")
+        callback()
 
+    def _clear_body(self):
+        # Clear everything below the nav bar (row=1+)
+        for child in self.content_frame.grid_slaves():
+            info = child.grid_info()
+            if info.get("row", 99) >= 1:
+                child.destroy()
 
-    def clear_content_frame(self):
-        """Removes all widgets from the content frame."""
-        # Safely stop and forget progress bar IF it exists AND is still a valid widget
-        if hasattr(self, 'progress_bar') and self.progress_bar is not None:
-            try:
-                if self.progress_bar.winfo_exists():
-                    if self.progress_bar.winfo_manager() == 'grid':
-                        self.progress_bar.stop()
-                        self.progress_bar.grid_forget()
-            except tkinter.TclError as e:
-                print(f"Ignoring TclError during progress bar cleanup: {e}")
-            except Exception as e:
-                print(f"Error clearing progress bar: {e}")
+    # ==============================================================================
+    #                                VIEWS
+    # ==============================================================================
+    def show_analysis_view(self):
+        self._clear_body()
+        self.status_label.configure(text="Analysis – upload or review last scan")
+        self._build_analysis_view()
 
-        # Destroy all direct children of content_frame
-        for widget in self.content_frame.winfo_children():
-            widget.destroy()
+    def show_pipeline_view(self):
+        self._clear_body()
+        self.status_label.configure(text="Pipeline – ACTORS flow overview")
+        self._build_pipeline_view()
 
-        # Reset frame references AFTER destroying children
-        self.dashboard_frame = None
-        self.security_center_frame = None
-        # Reset references to widgets within the dashboard frame
-        self.progress_bar = None
-        self.ai_summary_label = None
-        self.smart_buttons_widgets = [] # Clear button references
+    def show_actors_view(self):
+        self._clear_body()
+        self.status_label.configure(text="ACTORS – live reasoning demo")
+        self._build_actors_view()
 
+    def show_learning_view(self):
+        self._clear_body()
+        self.status_label.configure(text="Learning – performance over time")
+        self._build_learning_view()
 
-    def create_dashboard_frame(self):
-        """Creates the dashboard content frame based on the dark UI spec."""
-        # Main frame for the dashboard view
-        self.dashboard_frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
-        self.dashboard_frame.grid(row=0, column=0, sticky="nsew")
-        self.dashboard_frame.grid_columnconfigure(0, weight=1) # Single column layout
+    # ---------- Analysis view ----------
+    def _build_analysis_view(self):
+        # Top: verdict + smart questions
+        verdict_frame = ctk.CTkFrame(self.content_frame, fg_color="#020617")
+        verdict_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 5))
 
-        # Configure rows based on the dark UI spec layout
-        self.dashboard_frame.grid_rowconfigure(0, weight=0) # Top Body Frame (Screenshot/Breakdown + Severity)
-        self.dashboard_frame.grid_rowconfigure(1, weight=0) # AI Summary Label
-        self.dashboard_frame.grid_rowconfigure(2, weight=0) # Smart Buttons Row
-        self.dashboard_frame.grid_rowconfigure(3, weight=0) # User Input Row
-        self.dashboard_frame.grid_rowconfigure(4, weight=0) # Progress bar row (initially empty)
-        self.dashboard_frame.grid_rowconfigure(5, weight=1) # Spacer row pushes content up
+        if self.current_analysis:
+            self._render_verdict_card(verdict_frame, self.current_analysis)
+            self._render_smart_questions(verdict_frame, self.current_analysis)
+        else:
+            lbl = ctk.CTkLabel(
+                verdict_frame,
+                text="No scan loaded yet. Upload a screenshot to begin.",
+                font=ctk.CTkFont(size=14),
+                text_color="#9ca3af",
+            )
+            lbl.pack(pady=12, anchor="w", padx=10)
 
+        # Middle: chat log
+        self.chat_log_frame = ctk.CTkScrollableFrame(
+            self.content_frame, fg_color="#020617"
+        )
+        self.chat_log_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 10))
+        self.content_frame.grid_rowconfigure(2, weight=1)
 
-        # --- 1. Top Body Frame (Groups Screenshot/Breakdown and Severity Meter) ---
-        top_body_frame = ctk.CTkFrame(self.dashboard_frame, fg_color=utils.COLOR_CARD, corner_radius=8, border_width=1, border_color=utils.COLOR_BORDER) # Use card color
-        top_body_frame.grid(row=0, column=0, sticky="ew", pady=(0, 20), padx=10) # Grid this frame first
-        top_body_frame.grid_columnconfigure(0, weight=1) # Allow content to span width
-
-        # --- 1a. Screenshot + Threat Breakdown Row (Inside top_body_frame) ---
-        screenshot_breakdown_row = ctk.CTkFrame(top_body_frame, fg_color="transparent")
-        screenshot_breakdown_row.grid(row=0, column=0, sticky="ew", pady=(15, 15), padx=15) # Add internal padding
-        screenshot_breakdown_row.grid_columnconfigure(0, weight=3, minsize=250) # Screenshot column (adjust weight/min)
-        screenshot_breakdown_row.grid_columnconfigure(1, weight=4) # Threat Breakdown column
-        screenshot_breakdown_row.grid_rowconfigure(0, weight=0) # Let content define height
-
-        # Screenshot Display
-        img_card_frame = ctk.CTkFrame(screenshot_breakdown_row, fg_color=utils.COLOR_BACKGROUND, border_color=utils.COLOR_BORDER, border_width=1, corner_radius=6) # Slightly different bg
-        img_card_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 15)) # Stick to all sides, add right padding
-        img_card_frame.grid_rowconfigure(0, weight=1)
-        img_card_frame.grid_columnconfigure(0, weight=1)
-
-        try:
-            # Load image using the function from utils.py
-            screenshot_image = utils.load_ctk_image(self.image_path, size=(280, 180)) # Adjusted size
-            if screenshot_image and isinstance(screenshot_image, ctk.CTkImage): # Check if CTkImage was returned
-                img_label = ctk.CTkLabel(img_card_frame, image=screenshot_image, text="")
-                img_label.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
-            else: # Handle case where load_ctk_image returned None
-                 print(f"Warning: Screenshot CTkImage not loaded successfully for {self.image_path}. Displaying placeholder text.")
-                 # Display error/placeholder text if image failed to load
-                 error_text = f"[Image Load Failed]\n{os.path.basename(self.image_path)}" if os.path.exists(self.image_path) else "[Image Not Found]"
-                 error_label = ctk.CTkLabel(img_card_frame, text=error_text, text_color=utils.COLOR_TEXT_SECONDARY, font=utils.INFO_FONT)
-                 error_label.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
-        except Exception as e:
-             print(f"Error displaying screenshot: {e}")
-             error_label = ctk.CTkLabel(img_card_frame, text=f"[Display Error]\n{os.path.basename(self.image_path)}", text_color=utils.COLOR_TEXT_ERROR, font=utils.INFO_FONT)
-             error_label.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
-
-        # Threat Breakdown
-        # Create a frame to pass to the component function
-        breakdown_content_frame = ctk.CTkFrame(screenshot_breakdown_row, fg_color="transparent")
-        breakdown_content_frame.grid(row=0, column=1, sticky="nsew", padx=(15, 0)) # Add left padding
-        # Call the component function from threat_breakdown module
-        threat_breakdown.create_threat_breakdown_section(
-            parent_frame=breakdown_content_frame, # Pass the content frame
-            flagged_items=self.flagged_items # Use the data found during init
+        self._add_message(
+            "🛡️ Guardian AI online. I’ll help you understand this page and stay safe.",
+            "#22c55e",
+        )
+        self._add_message(
+            "📸 Upload a screenshot or ask a question about the current analysis.",
+            "#9ca3af",
         )
 
+        # Bottom: input bar
+        input_frame = ctk.CTkFrame(self.content_frame, fg_color="#020617", height=70)
+        input_frame.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 20))
+        input_frame.grid_columnconfigure(1, weight=1)
 
-        # --- 1b. Severity / Reasons / Recommendation Row (Inside top_body_frame) ---
-        info_frame = ctk.CTkFrame(top_body_frame, fg_color="transparent") # Transparent bg, part of the card
-        info_frame.grid(row=1, column=0, sticky="ew", padx=15, pady=(0, 15)) # Grid below the row above
-        info_frame.grid_columnconfigure(0, weight=0) # Severity label fixed
-        info_frame.grid_columnconfigure(1, weight=1) # Meter expands
-
-        # Severity Meter and Text
-        severity_text = f"Severity: {self.severity}"
-        sev_lower = self.severity.lower()
-        meter_value, meter_color = 0.0, utils.COLOR_TEXT_SECONDARY
-        if sev_lower == 'high': meter_value, meter_color = 0.95, utils.COLOR_SEVERITY_HIGH
-        elif sev_lower == 'medium': meter_value, meter_color = 0.6, utils.COLOR_SEVERITY_MEDIUM
-        elif sev_lower == 'low': meter_value, meter_color = 0.3, utils.COLOR_SEVERITY_LOW
-        elif sev_lower == 'safe' or sev_lower == 'none': meter_value, meter_color = 0.05, utils.COLOR_SEVERITY_SAFE
-        else: meter_value, meter_color = 0.1, utils.COLOR_TEXT_SECONDARY # Handle "Unknown" or "Error"
-
-        ctk.CTkLabel(info_frame, text=severity_text, text_color=meter_color, font=utils.LABEL_FONT, anchor="w").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=(0, 5))
-        severity_meter = ctk.CTkProgressBar(info_frame, orientation='horizontal', determinate_speed=1, mode='determinate', height=8, corner_radius=4, border_width=0, fg_color=utils.COLOR_BORDER, progress_color=meter_color) # Thinner bar
-        severity_meter.set(meter_value)
-        severity_meter.grid(row=0, column=1, sticky="ew", padx=(0, 0), pady=(0, 5))
-
-        # Reasons Text (using the reasons extracted from flagged_items)
-        reasons_display_str = f"Reasons: {', '.join(self.reasons_for_ai) if self.reasons_for_ai else 'None detected'}"
-        ctk.CTkLabel(info_frame, text=reasons_display_str, wraplength=self.win_width - 80, font=utils.INFO_FONT, text_color=utils.COLOR_TEXT_SECONDARY, anchor="w", justify="left").grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 5))
-
-        # Recommendation Text
-        rec_text = ""
-        rec_text_color = utils.COLOR_TEXT_PRIMARY # Default
-        rec_icon = "" # No default icon needed? Spec shows red icon for high
-        if sev_lower == 'high': rec_text, rec_text_color, rec_icon = "Recommendation: Delete this message immediately.", utils.COLOR_SEVERITY_HIGH, "⚠️ "
-        elif sev_lower == 'medium': rec_text, rec_text_color, rec_icon = "Recommendation: Proceed with extreme caution.", utils.COLOR_SEVERITY_MEDIUM, "⚠️ "
-        elif sev_lower == 'low': rec_text, rec_text_color = "Recommendation: Review carefully before proceeding.", utils.COLOR_TEXT_SECONDARY # Subtle for low
-        elif sev_lower == 'safe' or sev_lower == 'none': rec_text, rec_text_color = "Recommendation: Appears safe, but remain vigilant.", utils.COLOR_SEVERITY_SAFE
-
-        if rec_text:
-            recommendation_label = ctk.CTkLabel(info_frame,
-                                                text=f"{rec_icon}{rec_text}", # Prepend icon if exists
-                                                font=utils.INFO_FONT,
-                                                text_color=rec_text_color,
-                                                wraplength=self.win_width - 80,
-                                                anchor="w", justify="left")
-            recommendation_label.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 0)) # No bottom padding
-
-
-        # --- 2. AI Interaction Area Label (Replaces Chatbox) ---
-        ai_area_frame = ctk.CTkFrame(self.dashboard_frame, fg_color=utils.COLOR_CARD, corner_radius=8, border_width=1, border_color=utils.COLOR_BORDER)
-        ai_area_frame.grid(row=1, column=0, pady=(0, 15), sticky="ew", padx=10)
-        ai_area_frame.grid_columnconfigure(0, weight=1)
-
-        self.ai_summary_label = ctk.CTkLabel(ai_area_frame, text="Initializing AI analysis...", font=utils.BODY_FONT, # Use Body font
-                                             text_color=utils.COLOR_TEXT_SECONDARY, anchor="w", justify="left",
-                                             wraplength=self.win_width - 80) # Adjust wraplength
-        self.ai_summary_label.grid(row=0, column=0, sticky="ew", padx=15, pady=15)
-        # Trigger initial AI response to populate this label only if OCR was successful
-        if not self.ocr_text.startswith("Error:"):
-             self.after(100, lambda: self.on_ask("Initial analysis based on OCR text")) # Ask for initial summary
-        else:
-             # If OCR failed, update label immediately
-             self.ai_summary_label.configure(text=f"Cannot analyze: {self.ocr_text}", text_color=utils.COLOR_TEXT_ERROR)
-
-
-        # --- 3. Smart Question Buttons ---
-        # Call the component function from question_buttons module
-        returned_value = question_buttons.create_smart_question_buttons(
-            parent_frame=self.dashboard_frame, # Pass the main dashboard frame
-            button_click_callback=self.on_smart_button_click,
-            window_width=self.win_width
+        upload_btn = ctk.CTkButton(
+            input_frame,
+            text="📸 Upload",
+            width=90,
+            height=48,
+            font=ctk.CTkFont(size=15, weight="bold"),
+            fg_color="#2563eb",
+            hover_color="#1d4ed8",
+            command=self._upload_screenshot,
         )
-        # The component now returns the frame and the buttons
-        if isinstance(returned_value, tuple) and len(returned_value) == 2:
-            smart_buttons_frame, self.smart_buttons_widgets = returned_value
-            # Grid the returned frame below AI summary
-            smart_buttons_frame.grid(row=2, column=0, pady=(0, 20), padx=10, sticky="ew")
+        upload_btn.grid(row=0, column=0, padx=10, pady=10, sticky="w")
+
+        self.chat_entry = ctk.CTkEntry(
+            input_frame,
+            placeholder_text="Ask Guardian AI about this page...",
+            height=48,
+            font=ctk.CTkFont(size=14),
+        )
+        self.chat_entry.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
+        self.chat_entry.bind("<Return>", self._send_message)
+
+        send_btn = ctk.CTkButton(
+            input_frame,
+            text="➤ Send",
+            width=90,
+            height=48,
+            fg_color="#22c55e",
+            hover_color="#16a34a",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            command=self._send_message,
+        )
+        send_btn.grid(row=0, column=2, padx=10, pady=10, sticky="e")
+
+        # Feedback (appears only when we have an analysis)
+        self._render_feedback_row()
+
+    def _render_verdict_card(self, parent: ctk.CTkFrame, analysis: AnalysisResult):
+        card = ctk.CTkFrame(parent, fg_color="#0f172a", corner_radius=10)
+        card.pack(fill="x", padx=5, pady=(8, 4))
+
+        # Icon + title
+        if "HIGH" in analysis.severity:
+            icon = "🚨 HIGH RISK"
+            color = "#ef4444"
+        elif "MEDIUM" in analysis.severity or "⚠️" in analysis.severity:
+            icon = "⚠️ Suspicious"
+            color = "#eab308"
         else:
-            print("Warning: question_buttons.create_smart_question_buttons did not return the expected (frame, buttons) tuple.")
-            self.smart_buttons_widgets = []
+            icon = "✅ Safe"
+            color = "#22c55e"
 
+        title = ctk.CTkLabel(
+            card,
+            text=f"{icon}   (confidence {analysis.confidence:.0%})",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=color,
+        )
+        title.pack(anchor="w", padx=10, pady=(8, 4))
 
-        # --- 4. User Input & Action Buttons ---
-        input_area_frame = ctk.CTkFrame(self.dashboard_frame, fg_color="transparent")
-        input_area_frame.grid(row=3, column=0, pady=(0, 10), padx=10, sticky="ew")
-        input_area_frame.grid_columnconfigure(1, weight=1) # Make entry expand
-        input_area_frame.grid_columnconfigure(0, weight=0) # Copy button fixed
-        input_area_frame.grid_columnconfigure(2, weight=0) # Ask button fixed
+        # Reasons
+        reasons_text = (
+            "\n".join(f"• {r}" for r in analysis.reasons) or "• No specific threats identified."
+        )
+        reasons_lbl = ctk.CTkLabel(
+            card,
+            text=reasons_text,
+            font=ctk.CTkFont(size=14),
+            text_color="#e5e7eb",
+            justify="left",
+        )
+        reasons_lbl.pack(anchor="w", padx=10, pady=(0, 6))
 
-        # Copy Button (Left)
-        self.copy_button = ctk.CTkButton(input_area_frame, text="Copy", command=self._copy_last_response,
-                                         font=utils.BUTTON_FONT, width=80, height=40,
-                                         fg_color=utils.COLOR_BUTTON_COPY_FG, # Use specific copy colors if needed
-                                         hover_color=utils.COLOR_BUTTON_COPY_HOVER,
-                                         text_color=utils.COLOR_BUTTON_COPY_TEXT,
-                                         border_width=1, border_color=utils.COLOR_BORDER,
-                                         corner_radius=8, state="disabled")
-        self.copy_button.grid(row=0, column=0, sticky="w", padx=(0, 10))
+        # Optional screenshot hint
+        if analysis.image_path and os.path.exists(analysis.image_path):
+            hint = ctk.CTkLabel(
+                card,
+                text=f"Screenshot: {os.path.basename(analysis.image_path)}",
+                font=ctk.CTkFont(size=12),
+                text_color="#9ca3af",
+            )
+            hint.pack(anchor="w", padx=10, pady=(0, 6))
 
-        # User Input Entry (Center)
-        self.user_entry = ctk.CTkEntry(input_area_frame, placeholder_text="Ask about the risk or how to proceed…",
-                                       height=40, fg_color=utils.COLOR_CARD, # Use card color for entry bg
-                                       text_color=utils.COLOR_TEXT_PRIMARY, font=utils.BODY_FONT, # Use body font
-                                       border_color=utils.COLOR_BORDER, border_width=1, corner_radius=8)
-        self.user_entry.grid(row=0, column=1, sticky="ew", padx=0)
-        self.user_entry.bind("<Return>", self.on_ask)
+    def _render_smart_questions(self, parent: ctk.CTkFrame, analysis: AnalysisResult):
+        if not analysis.reasons:
+            return
+        self.smart_button_frame = ctk.CTkFrame(parent, fg_color="#020617")
+        self.smart_button_frame.pack(fill="x", padx=5, pady=(0, 6))
 
-        # Ask AI Button (Right)
-        self.ask_button = ctk.CTkButton(input_area_frame, text="Ask AI", command=self.on_ask,
-                                        font=utils.BUTTON_FONT, width=100, height=40,
-                                        fg_color=utils.COLOR_BUTTON_PRIMARY_FG,
-                                        hover_color=utils.COLOR_BUTTON_PRIMARY_HOVER,
-                                        text_color=utils.COLOR_BUTTON_PRIMARY_TEXT,
-                                        corner_radius=8)
-        self.ask_button.grid(row=0, column=2, sticky="e", padx=(10, 0))
+        questions = {"What should I do next?", "How did you detect this?"}
+        for reason in analysis.reasons:
+            low = reason.lower()
+            if any(w in low for w in ["urgent", "now", "immediate"]):
+                questions.add("Why is the urgency tactic risky?")
+            if any(w in low for w in ["link", "url", "click"]):
+                questions.add("How can I safely check this link?")
+            if any(w in low for w in ["password", "login", "account"]):
+                questions.add("Why is it asking for my credentials?")
 
-        # Progress Bar (Created but not gridded initially)
-        self.progress_bar = ctk.CTkProgressBar(self.dashboard_frame, orientation='horizontal',
-                                               mode='indeterminate', height=5, corner_radius=3,
-                                               progress_color=utils.COLOR_TEXT_ACCENT)
+        for q in list(questions)[:4]:
+            btn = ctk.CTkButton(
+                self.smart_button_frame,
+                text=q,
+                height=32,
+                fg_color="#111827",
+                hover_color="#1f2937",
+                text_color="#e5e7eb",
+                font=ctk.CTkFont(size=13),
+                command=lambda qq=q: self._ask_smart_question(qq),
+            )
+            btn.pack(side="left", padx=4, pady=4)
 
+    def _render_feedback_row(self):
+        if not self.current_analysis:
+            return
+        self.feedback_frame = ctk.CTkFrame(self.content_frame, fg_color="#020617")
+        self.feedback_frame.grid(row=4, column=0, sticky="ew", padx=20, pady=(0, 10))
 
-    # --- Tab Switching Methods ---
-    def show_dashboard_frame(self):
-        """Clears content frame and shows the dashboard frame."""
-        self.clear_content_frame()
-        self.create_dashboard_frame() # This now sets up the new dashboard layout
-        # Highlight the active tab button (use text color)
-        self.dashboard_button.configure(text_color=utils.COLOR_TEXT_PRIMARY) # Active color
-        self.security_center_button.configure(text_color=utils.COLOR_TEXT_SECONDARY) # Inactive color
+        label = ctk.CTkLabel(
+            self.feedback_frame,
+            text="Was this verdict accurate?",
+            font=ctk.CTkFont(size=13),
+            text_color="#9ca3af",
+        )
+        label.pack(side="left", padx=(5, 10))
 
-    def show_security_center_frame(self):
-        """Clears content frame and shows the security center frame using the component."""
-        self.clear_content_frame()
-        # Call the component function from security_center module
-        self.security_center_frame = security_center.create_security_center_tab(self.content_frame)
-        # The component itself should handle its internal gridding.
-        # We just need to make sure the content_frame is clear.
-        # Highlight the active tab button
-        self.dashboard_button.configure(text_color=utils.COLOR_TEXT_SECONDARY) # Inactive color
-        self.security_center_button.configure(text_color=utils.COLOR_TEXT_PRIMARY) # Active color
+        buttons = [
+            ("✅ Correct", True, "#22c55e"),
+            ("❌ Missed threat", False, "#ef4444"),
+            ("⚠️ False alarm", False, "#eab308"),
+        ]
+        for text, is_correct, color in buttons:
+            b = ctk.CTkButton(
+                self.feedback_frame,
+                text=text,
+                height=30,
+                fg_color=color,
+                hover_color="#ffffff",
+                text_color="#020617",
+                font=ctk.CTkFont(size=12, weight="bold"),
+                command=lambda ok=is_correct, t=text: self._on_feedback(ok, t),
+            )
+            b.pack(side="left", padx=4, pady=4)
 
-    # --- Event Handlers and AI Interaction ---
-    def on_smart_button_click(self, question):
-        """Handles clicks on the smart suggestion buttons."""
-        if self.is_loading: return
-        # Check if user_entry exists before manipulating
-        if hasattr(self, 'user_entry') and self.user_entry is not None and self.user_entry.winfo_exists():
-             self.user_entry.delete(0, "end")
-             self.user_entry.insert(0, question)
-             self.on_ask() # Trigger the AI query with the button's question
-        else:
-             print("Error: Cannot handle smart button click, user entry missing.")
+    # ---------- other views ----------
+    def _build_pipeline_view(self):
+        frame = ctk.CTkFrame(self.content_frame, fg_color="#020617")
+        frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=20)
 
+        ctk.CTkLabel(
+            frame,
+            text="ACTORS Pipeline",
+            font=ctk.CTkFont(size=30, weight="bold"),
+            text_color="#f97373",
+        ).pack(pady=(10, 20))
 
-    def _run_ai_in_thread(self, user_input):
-        """Runs the AI handler in a separate thread."""
-        print("Starting AI request thread...")
+        steps = [
+            "📸 Screenshot capture",
+            "🔍 YOLOv8 element detection",
+            "📝 OCR text extraction",
+            "🎯 Threat scoring (rules + ML)",
+            "🛡️ Guardian verdict",
+            "💭 Smart questions",
+            "👨‍🏫 Feedback → learning",
+        ]
+        for s in steps:
+            ctk.CTkLabel(
+                frame,
+                text=s,
+                font=ctk.CTkFont(size=18),
+                text_color="#e5e7eb",
+            ).pack(anchor="w", padx=20, pady=4)
+
+    def _build_actors_view(self):
+        frame = ctk.CTkFrame(self.content_frame, fg_color="#020617")
+        frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=20)
+
+        ctk.CTkLabel(
+            frame,
+            text="🔬 ACTORS Live Reasoning",
+            font=ctk.CTkFont(size=30, weight="bold"),
+            text_color="#f97373",
+        ).pack(pady=(10, 25))
+
+        desc = (
+            "This demo walks through Reason → Evaluate → Execute on a fake scan.\n"
+            "In your full build, this will replay the real decision trace for each verdict."
+        )
+        ctk.CTkLabel(
+            frame,
+            text=desc,
+            font=ctk.CTkFont(size=14),
+            text_color="#9ca3af",
+            justify="left",
+        ).pack(pady=(0, 20))
+
+        demo_btn = ctk.CTkButton(
+            frame,
+            text="▶️ Run ACTORS demo",
+            height=60,
+            width=260,
+            fg_color="#22c55e",
+            hover_color="#16a34a",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            command=self._run_actors_demo,
+        )
+        demo_btn.pack(pady=10)
+
+    def _build_learning_view(self):
+        frame = ctk.CTkFrame(self.content_frame, fg_color="#020617")
+        frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=20)
+
+        ctk.CTkLabel(
+            frame,
+            text="🧠 Guardian AI Learning",
+            font=ctk.CTkFont(size=30, weight="bold"),
+            text_color="#e5e7eb",
+        ).pack(pady=(10, 25))
+
+        acc = mock_calculate_accuracy()
+        ctk.CTkLabel(
+            frame,
+            text=f"🎯 Current accuracy: {acc:.1%}",
+            font=ctk.CTkFont(size=36, weight="bold"),
+            text_color="#22c55e",
+        ).pack(pady=10)
+
+        btn_row = ctk.CTkFrame(frame, fg_color="transparent")
+        btn_row.pack(pady=30)
+
+        graph_btn = ctk.CTkButton(
+            btn_row,
+            text="📊 Show learning curve",
+            height=70,
+            width=280,
+            fg_color="#2563eb",
+            hover_color="#1d4ed8",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            command=self._show_learning_graph,
+        )
+        graph_btn.pack(side="left", padx=10)
+
+        train_btn = ctk.CTkButton(
+            btn_row,
+            text="👨‍🏫 Open training view",
+            height=70,
+            width=280,
+            fg_color="#22c55e",
+            hover_color="#16a34a",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            command=self._show_training,
+        )
+        train_btn.pack(side="left", padx=10)
+
+    # ==============================================================================
+    #                          CHAT + EVENTS + HELPERS
+    # ==============================================================================
+    def _add_message(self, text: str, color: str = "#e5e7eb"):
+        if not self.chat_log_frame:
+            return
+        frame = ctk.CTkFrame(self.chat_log_frame, fg_color="transparent")
+        frame.pack(fill="x", padx=10, pady=4)
+        lbl = ctk.CTkLabel(
+            frame,
+            text=text,
+            font=ctk.CTkFont(size=14),
+            text_color=color,
+            justify="left",
+            wraplength=800,
+        )
+        lbl.pack(anchor="w")
+        self.chat_log_frame._parent_canvas.yview_moveto(1.0)
+
+    def _send_message(self, event=None):
+        if not self.chat_entry or self.is_loading_ai:
+            return
+        text = self.chat_entry.get().strip()
+        if not text:
+            return
+        self.chat_entry.delete(0, "end")
+        self._add_message(f"👤 You: {text}", "#60a5fa")
+        self.is_loading_ai = True
+        self._add_message("🤖 Guardian AI: 🔄 Analyzing...", "#fbbf24")
+        threading.Thread(
+            target=self._run_ai_thread, args=(text,), daemon=True
+        ).start()
+
+    def _ask_smart_question(self, q: str):
+        if not self.chat_entry:
+            return
+        self._add_message(f"👤 You: {q}", "#60a5fa")
+        self.is_loading_ai = True
+        self._add_message("🤖 Guardian AI: 🔄 Analyzing...", "#fbbf24")
+        threading.Thread(
+            target=self._run_ai_thread, args=(q,), daemon=True
+        ).start()
+
+    def _run_ai_thread(self, query: str):
+        resp = mock_ai_response(query, self.current_analysis)
+        self.ai_response_queue.put(resp)
+        self.is_loading_ai = False
+
+    def _upload_screenshot(self):
+        path = filedialog.askopenfilename(
+            filetypes=[("Images", "*.png *.jpg *.jpeg *.webp")]
+        )
+        if not path:
+            return
+        # In your full build, you’d send this to the engine and get real severity/reasons.
+        self.current_analysis = AnalysisResult(
+            severity="⚠️ MEDIUM RISK",
+            reasons=["Detected login form", "Contains external link", "Unusual sender"],
+            image_path=path,
+            confidence=0.82,
+        )
+        messagebox.showinfo(
+            "Guardian AI",
+            "Screenshot loaded. Reopening Analysis view with updated verdict.",
+        )
+        self.show_analysis_view()
+
+    def _on_feedback(self, was_correct: bool, label: str):
+        if not self.current_analysis:
+            return
+        mock_record_feedback(
+            was_correct, self.current_analysis.confidence, self.current_analysis.severity
+        )
+        self._add_message(f"✅ Feedback received: {label}", "#9ca3af")
+        # Disable buttons after one click
+        if self.feedback_frame:
+            for child in self.feedback_frame.winfo_children():
+                if isinstance(child, ctk.CTkButton):
+                    child.configure(state="disabled")
+
+    def _run_actors_demo(self):
+        messagebox.showinfo(
+            "ACTORS Demo",
+            "Reason → Evaluate → Execute demo.\n\nIn your full build, this will replay the actual decision trace.",
+        )
+
+    def _show_learning_graph(self):
+        x = np.arange(1, 26)
+        base = 0.6 + 0.015 * x
+        noise = np.random.normal(0, 0.015, size=x.shape).cumsum()
+        y = np.clip(base + noise, 0.4, 1.0)
+
+        fig, ax = plt.subplots(figsize=(10, 6), facecolor="#020617")
+        ax.set_facecolor("#020617")
+        ax.plot(x, y, "o-", color="#22c55e", linewidth=3, markersize=8)
+        ax.fill_between(x, y, 0.4, color="#22c55e", alpha=0.25)
+        ax.set_ylim(0.4, 1.02)
+        ax.set_xlabel("Feedback events", color="white", fontsize=12)
+        ax.set_ylabel("Estimated accuracy", color="white", fontsize=12)
+        ax.set_title("Guardian AI learning over time", color="white", fontsize=16)
+        ax.tick_params(colors="white")
+        ax.grid(True, alpha=0.3)
+
+        win = ctk.CTkToplevel(self)
+        win.title("Learning curve")
+        win.geometry("900x600")
+        canvas = FigureCanvasTkAgg(fig, master=win)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
+        plt.close(fig)
+
+    def _show_training(self):
+        win = ctk.CTkToplevel(self)
+        win.title("Training interface")
+        win.geometry("700x500")
+        ctk.CTkLabel(
+            win,
+            text="Here you’ll add labeled examples and corrections.\nIn the full build this will write to your training/feedback store.",
+            font=ctk.CTkFont(size=16),
+            justify="left",
+        ).pack(expand=True, padx=20, pady=40)
+
+    def _check_ai_response_queue(self):
         try:
-            # Get the summary statement from the AI handler
-            # Pass the extracted reasons list to the AI handler
-            response_summary = ai_handler.get_ai_response(user_input, self.reasons_for_ai, self.severity, self.ocr_text)
-            self.response_queue.put(response_summary) # Put summary in queue
-        except Exception as e:
-            print(f"Error in AI thread: {e}")
-            self.response_queue.put(f"Error: Could not get AI analysis.") # Put error message in queue
-        finally:
-            print("AI request thread finished.")
-
-
-    def _check_response_queue(self):
-        """Checks the queue for AI responses."""
-        try:
-            response_summary = self.response_queue.get_nowait()
-            print("Found response summary in queue:", response_summary)
-            self._handle_ai_response(response_summary)
+            while True:
+                resp = self.ai_response_queue.get_nowait()
+                self._add_message(f"🤖 Guardian AI: {resp}", "#e5e7eb")
         except queue.Empty:
-            pass # No response yet
-        except Exception as e:
-            print(f"Error checking response queue: {e}")
-        finally:
-            # Schedule the next check only if the window still exists
-            try:
-                 if self.winfo_exists():
-                      self.after(100, self._check_response_queue)
-            except Exception:
-                 pass # Window likely destroyed
+            pass
+        self.after(120, self._check_ai_response_queue)
 
+# ==============================================================================
+#                               ENTRY POINT
+# ==============================================================================
 
-    def _handle_ai_response(self, response_summary):
-        """Updates the AI summary label after the response is received."""
-        print("Handling AI response in main thread...")
-        self.last_ai_summary = response_summary # Store the summary
-        self.is_loading = False
-
-        # Stop and hide the progress bar safely
-        if hasattr(self, 'progress_bar') and self.progress_bar is not None:
-             try:
-                 if self.progress_bar.winfo_exists():
-                     if self.progress_bar.winfo_manager() == 'grid':
-                         self.progress_bar.stop()
-                         self.progress_bar.grid_forget()
-             except tkinter.TclError as e: print(f"Ignoring TclError during progress bar cleanup: {e}")
-             except Exception as e: print(f"Error handling progress bar: {e}")
-
-        # Re-enable UI elements safely
-        if hasattr(self, 'user_entry') and self.user_entry is not None and self.user_entry.winfo_exists(): self.user_entry.configure(state="normal")
-        if hasattr(self, 'ask_button') and self.ask_button is not None and self.ask_button.winfo_exists(): self.ask_button.configure(state="normal")
-        if hasattr(self, 'copy_button') and self.copy_button is not None and self.copy_button.winfo_exists(): self.copy_button.configure(state="normal" if self.last_ai_summary else "disabled")
-
-        # Re-enable smart buttons
-        if hasattr(self, 'smart_buttons_widgets'):
-             for btn in self.smart_buttons_widgets:
-                 try:
-                     if isinstance(btn, ctk.CTkButton) and btn.winfo_exists(): btn.configure(state="normal")
-                 except Exception as e: print(f"Error enabling smart button: {e}")
-
-        # Update the AI summary label safely
-        if hasattr(self, 'ai_summary_label') and self.ai_summary_label is not None:
-            try:
-                if self.ai_summary_label.winfo_exists():
-                     # Determine text color based on whether it's an error message
-                     text_color = utils.COLOR_TEXT_ERROR if response_summary.startswith("Error:") else utils.COLOR_TEXT_PRIMARY
-                     self.ai_summary_label.configure(text=self.last_ai_summary, text_color=text_color) # Update text and color
-            except Exception as e: print(f"Error updating AI summary label: {e}")
-
-        print("UI updated with AI response summary.")
-
-
-    def _copy_last_response(self):
-        """Copies the last AI summary text to the clipboard."""
-        text_to_copy = self.last_ai_summary
-        if text_to_copy and not text_to_copy.startswith("Error:"): # Don't copy error messages
-            try:
-                self.clipboard_clear()
-                self.clipboard_append(text_to_copy)
-                print("✅ Copied last AI summary to clipboard.")
-                # Temporarily change button text for feedback
-                if hasattr(self, 'copy_button') and self.copy_button.winfo_exists():
-                    self.copy_button.configure(text="Copied!")
-                    # Use lambda to ensure winfo_exists is checked *when* the after delay completes
-                    self.after(1500, lambda: self.copy_button.configure(text="Copy") if hasattr(self, 'copy_button') and self.copy_button.winfo_exists() else None)
-            except Exception as e:
-                print(f"❌ Error copying to clipboard: {e}")
-                # Optionally show error in UI
-                if hasattr(self, 'ai_summary_label') and self.ai_summary_label.winfo_exists():
-                     self.ai_summary_label.configure(text="Error copying text.", text_color=utils.COLOR_TEXT_ERROR)
-        elif text_to_copy.startswith("Error:"):
-             print("⚠️ Cannot copy error messages.")
-        else:
-            print("⚠️ No AI summary available to copy.")
-
-
-    def on_ask(self, event=None):
-        """Handles the user asking a question (via button or Enter key)."""
-        # Determine user input source
-        if isinstance(event, str):
-             user_input = event # Use the string directly for initial analysis/specific calls
-             print(f"AI analysis triggered with context: '{user_input}'")
-             # Do not proceed if OCR failed initially
-             if self.ocr_text.startswith("Error:"):
-                  print("Skipping initial analysis due to OCR error.")
-                  return
-        else:
-             # Check if user_entry exists and is valid before getting value
-             if not hasattr(self, 'user_entry') or self.user_entry is None or not self.user_entry.winfo_exists():
-                  print("Error: User entry widget does not exist.")
-                  return
-             user_input = self.user_entry.get().strip() # Get text from entry
-             if not user_input:
-                 print("Empty input, ignoring.")
-                 return # Ignore empty input
-             print(f"Ask triggered with input: '{user_input}', starting loading...")
-             self.user_entry.delete(0, "end") # Clear the entry
-
-        if self.is_loading:
-            print("Already loading, ignoring request.")
-            return # Prevent multiple simultaneous requests
-
-        self.is_loading = True
-        self.last_ai_summary = "" # Clear previous summary
-
-        # Disable UI elements safely
-        if hasattr(self, 'user_entry') and self.user_entry.winfo_exists(): self.user_entry.configure(state="disabled")
-        if hasattr(self, 'ask_button') and self.ask_button.winfo_exists(): self.ask_button.configure(state="disabled")
-        if hasattr(self, 'copy_button') and self.copy_button.winfo_exists(): self.copy_button.configure(state="disabled")
-        if hasattr(self, 'smart_buttons_widgets'):
-            for btn in self.smart_buttons_widgets:
-                 try: # Add try-except for safety
-                      if isinstance(btn, ctk.CTkButton) and btn.winfo_exists(): btn.configure(state="disabled")
-                 except Exception as e: print(f"Error disabling smart button: {e}")
-
-
-        # Show and start the progress bar
-        if hasattr(self, 'progress_bar') and self.progress_bar is not None:
-             try:
-                 if self.progress_bar.winfo_exists():
-                     # Grid it in row 4 of dashboard_frame
-                     self.progress_bar.grid(row=4, column=0, sticky="ew", pady=(5, 10), padx=10) # Added bottom padding
-                     self.progress_bar.start()
-                 else: print("Warning: Progress bar widget no longer exists when trying to grid.")
-             except tkinter.TclError as e: print(f"Ignoring TclError during progress bar grid: {e}")
-             except Exception as e: print(f"Error gridding progress bar: {e}")
-        else: print("Warning: Progress bar not initialized.")
-
-        # Update summary label to show loading state
-        if hasattr(self, 'ai_summary_label') and self.ai_summary_label is not None:
-             try:
-                 if self.ai_summary_label.winfo_exists():
-                      self.ai_summary_label.configure(text="Asking AI...", text_color=utils.COLOR_TEXT_SECONDARY)
-             except Exception as e: print(f"Error updating summary label to loading: {e}")
-
-
-        self.update_idletasks() # Ensure UI updates before thread start
-
-        # Start the AI request thread
-        thread = threading.Thread(target=self._run_ai_in_thread, args=(user_input,), daemon=True)
-        thread.start()
-
-
-# --- Entry Point ---
-if __name__ == "__main__":
-    # --- Argument Parsing ---
-    if len(sys.argv) != 4:
-        print("Usage: python phishrx_ai_gui.py <Severity> <Reasons|''> <ImagePath>") # Updated usage message
-        print("Example: python phishrx_ai_gui.py \"Medium\" \"Contains URL|Urgency\" \"/path/to/screenshot.png\"")
-        print("\nAttempting to run with default test values...")
-        # --- Default Test Values ---
-        severity = "High"
-        # Reasons are determined by find_suspicious_text, pass empty initially for test
-        initial_reasons = []
-        image_path = "test_screenshot.png" # Default test image name
-
-        # Create dummy image if it doesn't exist and PIL is available
-        if not os.path.exists(image_path) and utils.PIL_AVAILABLE: # Check utils.PIL_AVAILABLE
-            try:
-                from PIL import Image, ImageDraw, ImageFont # Import PIL locally for dummy image creation
-                img = Image.new('RGB', (600, 400), color = (200, 220, 255))
-                d = ImageDraw.Draw(img)
-                try: fnt = ImageFont.truetype("arial.ttf", 15)
-                except IOError: fnt = ImageFont.load_default()
-                d.text((10,10), f"Subject: URGENT: Verify Your Account Password!\n\nDear User,\n\nPlease confirm your password by clicking here: http://example.com\n\nThanks,\nSupport Team", fill=(50,50,50), font=fnt)
-                img.save(image_path)
-                print(f"Created dummy image: {image_path}")
-            except Exception as img_err:
-                print(f"Could not create dummy image: {img_err}.")
-        elif not os.path.exists(image_path):
-             print(f"Warning: Test image '{image_path}' not found and cannot be created (PIL unavailable).")
-
-        print(f"Running with default test values: Severity='{severity}', Image='{image_path}'")
-
-    else:
-        # Get values from command line arguments
+def parse_cli_args() -> AnalysisResult | None:
+    """
+    Tray calls: python phisher_ai_gui.py "<severity>" "<reasons>|..." "<image_path>"
+    Returns an AnalysisResult built from those args, or None if not provided.
+    """
+    if len(sys.argv) == 4:
         severity = sys.argv[1]
-        # Reasons argument is not directly used now, as find_suspicious_text handles it
-        initial_reasons_str = sys.argv[2] # Keep for potential future use or logging
+        reasons_raw = sys.argv[2]
         image_path = sys.argv[3]
-        initial_reasons = initial_reasons_str.split('|') if initial_reasons_str else [] # Split if provided
 
-        print(f"Received arguments: Severity='{severity}', Image='{image_path}'")
-        if not os.path.exists(image_path):
-             print(f"❌ ERROR: Image path from argument does not exist: {image_path}")
-             # Handle error appropriately - maybe exit or show error in UI
-             # For now, we'll let the __init__ handle the error message display
-             # sys.exit(1)
+        reasons = reasons_raw.split("|") if reasons_raw else []
+        return AnalysisResult(
+            severity=severity,
+            reasons=reasons,
+            image_path=image_path,
+            confidence=0.85,
+        )
+    return None
 
 
-    # Initialize and run the app
-    app = PhishRxApp(severity, initial_reasons, image_path) # Use renamed class
+if __name__ == "__main__":
+    initial = parse_cli_args()
+    app = GuardianAI(initial_analysis=initial)
     app.mainloop()

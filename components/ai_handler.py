@@ -1,164 +1,165 @@
+# // ==== [ENGINE] Gemini AI Handler ===========================================
+# // Responsibility: Connect to the Gemini API to get AI responses.
+# // Connections:   Called by phisher_ai_gui.py. Replaces old Hugging Face logic.
+# // Notes:         Uses the user-provided API key.
+# // ============================================================================
+
 import requests
-import os
+import json
 import time
 
-# --- CONFIG ---
-HF_API_KEY = os.getenv("HF_API_KEY", "API_HERE") 
-CLASSIFIER_MODEL_ID = "ealvaradob/bert-finetuned-phishing"
-GENERATOR_MODEL_ID = "google-t5/t5-large" 
+# // ==== [STATE] API Configuration ============================================
+# // Responsibility: Store the API key and endpoint.
+# // ============================================================================
 
-# --- HEADERS ---
-HEADERS = {
-    "Authorization": f"Bearer {HF_API_KEY}",
-    "Content-Type": "application/json"
-}
+# --- User-provided API Key ---
+API_KEY = "AIzaSyBEelzO00KvkXLg3hqP-wsdCCKO6glZ0S8" 
 
-# --- CLASSIFY FUNCTION ---
-def classify_phishing(text):
+API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={API_KEY}"
+
+# // ==== [E2] get_ai_response =================================================
+# // Responsibility: Get a contextual AI response from the Gemini API.
+# // Connections:   Called by the main GUI thread.
+# // ============================================================================
+# In ai_handler.py - FIX THE PROMPT:
+
+def get_ai_response(user_input, reasons, severity, ocr_text):
     """
-    Analyzes text using the Hugging Face classification model.
-    Handles various response formats and finds the label with the highest score.
+    Gets a contextual AI response focused on the ACTUAL SCREENSHOT ANALYSIS
     """
-    if not text:
-        return "Error", 0
-        
-    payload = {"inputs": text}
-    url = f"https://api-inference.huggingface.co/models/{CLASSIFIER_MODEL_ID}"
     
-    try:
-        response = requests.post(url, headers=HEADERS, json=payload, timeout=20)
-        response.raise_for_status() 
-        data = response.json()
-        print("Raw classification response:", data)
-
-        if isinstance(data, dict) and 'error' in data:
-            print(f"API Error in classification: {data['error']}")
-            return "Error", 0
-
-        if isinstance(data, list) and data:
-            results = data[0] if isinstance(data[0], list) else data
-            
-            if not results or not all(isinstance(item, dict) for item in results):
-                 print("Unexpected result format inside list:", results)
-                 return "Error", 0
-
-            top_result = max(results, key=lambda x: x.get('score', 0))
-            label = top_result.get("label", "Error")
-            if label.lower() == 'benign':
-                label = 'not phishing'
-            return label, top_result.get("score", 0)
-
-        print("Unexpected classification format:", data)
-        return "Error", 0
-    except requests.exceptions.Timeout:
-        print("Error: Classification request timed out.")
-        return "Error", 0
-    except requests.exceptions.RequestException as e:
-        print(f"Error during classification request: {e}")
-        return "Error", 0
-
-
-# --- GENERATOR FUNCTION (FINAL) ---
-def generate_explanation(user_input, severity, reasons, ocr_text=""):
-    """
-    Generates a helpful explanation using the Hugging Face generator model.
-    Handles API errors, model loading states, and timeouts gracefully.
-    """
-    reason_text = ", ".join(reasons) if reasons else "None identified"
-    emotion_tag = detect_emotion(ocr_text)
-    if emotion_tag:
-        reason_text += f", Emotional Tone: {emotion_tag}"
-
-    # --- FIX: Added 'Respond in English.' to the end of the task description ---
-    prompt = (
-        f"Context: A user is asking about a potentially malicious message.\n"
-        f"Severity: {severity}\n"
-        f"Detected Red Flags: {reason_text}\n"
-        f"Message Text: '{ocr_text if ocr_text else 'No text provided.'}'\n"
-        f"User's Question: '{user_input}'\n\n"
-        f"Task: In a reassuring and professional tone, summarize the situation, "
-        f"provide clear action steps, and ask if the user needs more help. Respond in English."
+    # FIXED SYSTEM PROMPT:
+    system_prompt = (
+        "You are GUARDIAN AI, a screenshot analysis assistant. "
+        "You ONLY analyze the OCR text from screenshots that users provide. "
+        "You NEVER claim to see previous interactions, network data, or files. "
+        "You ONLY discuss the specific screenshot content. "
+        "Be helpful and specific about the visual/text content. "
+        "If the user asks 'what do you see', refer ONLY to the OCR text from their screenshot. "
+        "Never give generic security advice - only advice specific to the analyzed content."
     )
-
-    payload = { "inputs": prompt, "parameters": { "max_new_tokens": 150, "do_sample": True, "temperature": 0.7 } }
-    url = f"https://api-inference.huggingface.co/models/{GENERATOR_MODEL_ID}"
     
-    try:
-        response = requests.post(url, headers=HEADERS, json=payload, timeout=30)
-        response.raise_for_status()
-
-        result = response.json()
-        print("Raw generator response:", result)
-
-        if isinstance(result, dict) and 'error' in result:
-            error_message = result['error']
-            print(f"API Error in generation: {error_message}")
-            if "loading" in error_message.lower():
-                return "The AI assistant is starting up. Please try again in a moment. ⏳"
-            return f"Error: The AI failed to generate a response. Details: {error_message}"
-
-        # --- FIX: Check for 'translation_text' OR 'generated_text' ---
-        generated_text = None
-        if isinstance(result, list) and result:
-            item = result[0]
-            generated_text = item.get("generated_text") or item.get("translation_text")
-        elif isinstance(result, dict):
-            generated_text = result.get("generated_text") or result.get("translation_text")
-
-        if generated_text:
-            return generated_text.strip()
-        else:
-            print("Unexpected generator format:", result)
-            return "Error: The AI returned an unexpected format."
-
-    except requests.exceptions.Timeout:
-        print("Generator request timed out. The model is likely still loading.")
-        return "The AI assistant is taking a moment to start up. Please try your request again in a minute. ⏳"
-    except requests.exceptions.RequestException as e:
-        print(f"Error during generator request: {e}")
-        return "Error: Could not connect to the AI assistant."
-
-
-# --- EMOTION DETECTION ---
-def detect_emotion(text):
-    if not text:
-        return None
-    t = text.lower()
-    if any(w in t for w in ["urgent", "immediately", "act now"]):
-        return "Urgency"
-    if any(w in t for w in ["congratulations", "you won", "claim"]):
-        return "Excitement / Deception"
-    if any(w in t for w in ["verify", "account", "security"]):
-        return "Fear / Pressure"
-    return None
-
-# --- MAIN WRAPPER ---
-def get_ai_response(user_input, severity, reasons, ocr_text=""):
-    label, score = classify_phishing(ocr_text or user_input)
-
-    if label.lower() == "phishing":
-        verdict = f"⚠️ Phishing Detected ({score:.1%} confidence)"
-    elif label.lower() == "not phishing":
-         verdict = f"✅ Safe Message ({score:.1%} confidence)"
-    else:
-        verdict = "❌ Analysis Error"
-        
-    explanation = generate_explanation(user_input, severity, reasons, ocr_text)
-    
-    return f"{verdict}\n\n{explanation}"
-
-# --- Example Call ---
-if __name__ == "__main__":
-    if not HF_API_KEY:
-        print("Error: HF_API_KEY environment variable not set.")
-        print("Please get a key from huggingface.co and set it in your environment.")
-    else:
-        print("Sending request to AI... (This may take a moment)")
-        test_response = get_ai_response(
-            user_input="Is this message safe?",
-            severity="High",
-            reasons=["Unusual link", "Spelling mistakes"],
-            ocr_text="Click here immediately to verify your account and win a prize!"
+    # FIXED USER PROMPT:
+    if "what do you see" in user_input.lower() or "what do you see" in user_input:
+        prompt = (
+            f"I am analyzing OCR text from your screenshot. Here's what I see:\n"
+            f"SCREENSHOT TEXT: \"{ocr_text[:500]}...\"\n\n"
+            f"Based on this text, I identified: {severity} risk level with these findings: {reasons}\n\n"
+            f"What specific aspects of this text would you like me to explain?"
         )
-        print("\n--- FINAL OUTPUT ---")
-        print(test_response)
+    else:
+        # Regular analysis prompt
+        prompt = (
+            f"Screenshot Analysis Results:\n"
+            f"- Risk Level: {severity}\n" 
+            f"- Findings: {reasons}\n"
+            f"- OCR Text: \"{ocr_text[:300]}...\"\n\n"
+            f"User Question: {user_input}\n\n"
+            f"Answer based ONLY on the screenshot content above."
+        )
+
+    # ... rest of your existing code ...
+
+    # --- 3. Construct the Payload ---
+    payload = {
+        "contents": [
+            {
+                "parts": [{"text": prompt}]
+            }
+        ],
+        "systemInstruction": {
+            "parts": [{"text": system_prompt}]
+        },
+        "generationConfig": {
+            "temperature": 0.5, # Lowered for more direct, less "creative" responses
+            "topK": 1,
+            "topP": 1,
+            "maxOutputTokens": 8192, # --- [FIX] Increased from 256 ---
+        }
+    }
+    
+    headers = {
+        'Content-Type': 'application/json'
+    }
+
+    # --- 4. Make the Request with Retry ---
+    max_retries = 3
+    delay = 1
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(API_URL, headers=headers, data=json.dumps(payload), timeout=20)
+            
+            if response.status_code == 200:
+                response_json = response.json()
+                
+                # --- [FIX] Safer response parsing ---
+                if not response_json.get('candidates'):
+                    # This can happen if the prompt is blocked
+                    if response_json.get('promptFeedback'):
+                        print(f"Gemini Error: Prompt blocked. Feedback: {response_json['promptFeedback']}")
+                        return "Error: The analysis request was blocked for safety reasons."
+                    return "Error: AI response was empty."
+
+                candidate = response_json['candidates'][0]
+                
+                # Check for MAX_TOKENS or other non-ideal finish reasons
+                finish_reason = candidate.get('finishReason')
+                if finish_reason and finish_reason not in ["STOP", "MAX_TOKENS"]:
+                    print(f"Gemini Warning: Non-stop finish reason: {finish_reason}")
+                    # If it's a safety block, say so.
+                    if finish_reason == "SAFETY":
+                        return "Error: The AI's response was blocked for safety reasons."
+
+                # Check for the actual text
+                if (candidate.get('content') and
+                    candidate['content'].get('parts') and
+                    candidate['content']['parts'][0].get('text')):
+                    
+                    text = candidate['content']['parts'][0]['text']
+                    return text.strip()
+                else:
+                    # This is the error you saw: "Unexpected response structure"
+                    # It means the candidate is there, but 'parts' is missing,
+                    # which can happen with MAX_TOKENS or other errors.
+                    print(f"Gemini Error: Unexpected response structure: {response_json}")
+                    return "Error: I received an incomplete response from the AI."
+
+            else:
+                print(f"Gemini Error: Status Code {response.status_code}, Response: {response.text}")
+                if 400 <= response.status_code < 500:
+                    return f"Error: API key or request issue ({response.status_code})."
+                print(f"Retrying in {delay}s...")
+                time.sleep(delay)
+                delay *= 2
+        
+        except requests.exceptions.RequestException as e:
+            print(f"Gemini Error: Request failed: {e}")
+            if attempt < max_retries - 1:
+                print(f"Retrying in {delay}s...")
+                time.sleep(delay)
+                delay *= 2
+            else:
+                return f"Error: Could not connect to the AI service ({e})."
+    
+    return "Error: The AI service is currently unavailable after multiple attempts."
+
+# // ==== [UTIL] Standalone Test ===============================================
+# // Responsibility: Allow testing this file directly.
+# // ============================================================================
+if __name__ == "__main__":
+    print("--- Testing Gemini AI Handler (Security Guard Persona) ---")
+    
+    # Test 1: Initial Analysis
+    print("\n--- Test 1: Initial Analysis ---")
+    test_reasons = ["Urgency", "Suspicious URL"]
+    test_severity = "High"
+    test_ocr = "URGENT! Your account is locked. Click http://bit.ly/fake to fix."
+    response1 = get_ai_response("Initial analysis", test_reasons, test_severity, test_ocr)
+    print(f"Response:\n{response1}")
+    
+    # Test 2: Follow-up
+    print("\n--- Test 2: Follow-up Question ---")
+    response2 = get_ai_response("What should I do now?", test_reasons, test_severity, test_ocr)
+    print(f"Response:\n{response2}")
+    
+    print("\n--- Test Complete ---")

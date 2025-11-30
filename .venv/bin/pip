@@ -1,4 +1,4 @@
-#!/Users/taek/PHISH-ER-Lite/.venv/bin/python3
+#!/Users/taek/PHISHRX/PhishRx/.venv/bin/python
 # -*- coding: utf-8 -*-
 import re
 import sys

@@ -1,234 +1,189 @@
-# utils.py
-import os
+# utils.py 
+import customtkinter as ctk
 import re
-import sys # Needed for platform check in force_window_focus
-import pytesseract
-import customtkinter as ctk # Import CTkImage here
-from customtkinter import CTkImage
-import tkinter # Needed for TclError in force_window_focus
+from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
+import os
+import sys
+import numpy as np
 
-# Attempt to import Pillow (PIL) for image handling
-# Define PIL_AVAILABLE globally within this module
+# --- OCR Imports ---
 try:
-    from PIL import Image
-    PIL_AVAILABLE = True
+    import pytesseract
+    PYTESSERACT_AVAILABLE = True
 except ImportError:
-    PIL_AVAILABLE = False
-    print("⚠️ Warning: PIL (Pillow) not installed. Image display will use placeholders.")
+    print("⚠️ pytesseract not found. OCR will be mocked.")
+    PYTESSERACT_AVAILABLE = False
 
+PIL_AVAILABLE = True
+SCAN_HISTORY_FILE = 'scan_history.csv'
 
-# --- Configuration ---
-SCAN_HISTORY_FILE = "scan_history.csv" # Define scan history file name
+# === THEME ===
+class AppColors:
+    LIGHT_BACKGROUND = "#f0f2f5"
+    LIGHT_CARD = "#ffffff"
+    LIGHT_CHAT_USER = "#007aff"
+    LIGHT_CHAT_BOT = "#e5e5ea"
+    LIGHT_TEXT_PRIMARY = "#000000"
+    LIGHT_TEXT_SECONDARY = "#8a8a8e"
+    LIGHT_BORDER = "#d1d1d6"
+    DARK_BACKGROUND = "#000000"
+    DARK_CARD = "#1c1c1e"
+    DARK_CHAT_USER = "#0a84ff"
+    DARK_CHAT_BOT = "#2c2c2e"
+    DARK_TEXT_PRIMARY = "#ffffff"
+    DARK_TEXT_SECONDARY = "#8e8e93"
+    DARK_BORDER = "#3a3a3c"
+    RED = "#ff3b30"
+    YELLOW = "#ffcc00"
+    GREEN = "#34c759"
+    BLUE = LIGHT_CHAT_USER
 
-# --- Theme Colors (Dark Mode from UI Specification) ---
-COLOR_BACKGROUND = "#1B1F23"        # Dark Charcoal
-COLOR_CARD = "#22272E"              # Slightly lighter card background
-COLOR_BORDER = "#2F363D"            # Subtle Gray Divider/Border
-COLOR_TEXT_PRIMARY = "#E6EDF3"      # Light Gray/White Text
-COLOR_TEXT_SECONDARY = "#8B949E"    # Medium Gray Text
-COLOR_TEXT_ACCENT = "#007AFF"       # Vibrant Blue (Buttons, Links, Title)
-COLOR_TEXT_INFO = "#58A6FF"         # Lighter Blue for info emphasis
-COLOR_TEXT_ERROR = "#F04A4A"        # Alert Red
-COLOR_SEVERITY_HIGH = "#F04A4A"
-COLOR_SEVERITY_MEDIUM = "#F7B731"   # Adjusted Yellow/Orange for dark mode
-COLOR_SEVERITY_LOW = "#58A6FF"      # Use Accent Blue for Low
-COLOR_SEVERITY_SAFE = "#3FB950"     # Green for Safe
-
-# --- Button Colors ---
-COLOR_BUTTON_PRIMARY_FG = "#007AFF"
-COLOR_BUTTON_PRIMARY_HOVER = "#005FCC" # Spec: Slight Blue Tint
-COLOR_BUTTON_PRIMARY_TEXT = "#FFFFFF" # White text on blue button
-
-# Secondary/Smart Question Buttons (Darker Background)
-COLOR_BUTTON_SECONDARY_FG = "#2F363D" # Darker Gray for secondary buttons
-COLOR_BUTTON_SECONDARY_HOVER = "#484F58" # Lighter Gray on hover
-COLOR_BUTTON_SECONDARY_TEXT = "#E6EDF3" # Light text
-
-# Copy Button (Matches Secondary)
-COLOR_BUTTON_COPY_FG = COLOR_BUTTON_SECONDARY_FG
-COLOR_BUTTON_COPY_HOVER = COLOR_BUTTON_SECONDARY_HOVER
-COLOR_BUTTON_COPY_TEXT = COLOR_BUTTON_SECONDARY_TEXT
-
-# --- Fonts (Using Tuples - Prioritize Inter if available) ---
-# Define base font family - adjust if Inter isn't available system-wide
-BASE_FONT_FAMILY = "Inter" # Or "Arial", "Roboto", "Segoe UI" as fallbacks
-
-try:
-    # Test if the base font is available (this is a basic check)
-    import tkinter.font
-    # Create a temporary root window only if one doesn't already exist
-    try:
-        # Attempt to get the default root window if it exists
-        root = tkinter._get_default_root('Error checking fonts')
-        root_created = False
-        if root is None: # If no default root, create one
-             raise tkinter.TclError("No default root window")
-    except (tkinter.TclError, AttributeError): # Catch error if no default root
-        root = tkinter.Tk()
-        root_created = True
-
-    if root: # Proceed only if we have a root window
-        if root_created:
-            root.withdraw() # Hide the window if we created it
-        available_fonts = list(tkinter.font.families(root)) # Pass root explicitly
-        if root_created:
-            root.destroy() # Destroy the temporary window if we created it
-
-        if BASE_FONT_FAMILY not in available_fonts:
-            print(f"⚠️ Warning: Font '{BASE_FONT_FAMILY}' not found. Falling back to 'Arial'.")
-            BASE_FONT_FAMILY = "Arial" # Default fallback
-    else:
-         print("⚠️ Could not get root window to check fonts. Defaulting to Arial.")
-         BASE_FONT_FAMILY = "Arial"
-
-except Exception as e:
-    print(f"⚠️ Error checking fonts, defaulting to Arial: {e}")
-    BASE_FONT_FAMILY = "Arial"
-
-# Font definitions based on spec (adjust pt sizes if needed)
-TITLE_FONT = (BASE_FONT_FAMILY, 20, "bold")        # e.g., 18-22pt
-LABEL_FONT = (BASE_FONT_FAMILY, 14, "bold")        # e.g., Body bold
-INFO_FONT = (BASE_FONT_FAMILY, 12, "normal")       # e.g., Body normal (14pt in spec, using 12 for less critical info)
-BODY_FONT = (BASE_FONT_FAMILY, 14, "normal")       # Font for main text like AI statement (14pt)
-BUTTON_FONT = (BASE_FONT_FAMILY, 14, "bold")       # e.g., 16pt semi-bold (using 14 bold)
-SMALL_BUTTON_FONT = (BASE_FONT_FAMILY, 12, "bold") # Slightly smaller for smart buttons
-# --- ADDED MISSING TREEVIEW FONTS ---
-TREEVIEW_FONT = (BASE_FONT_FAMILY, 11, "normal")      # Font for Treeview rows
-TREEVIEW_HEAD_FONT = (BASE_FONT_FAMILY, 12, "bold")   # Font for Treeview headings
-# --- END OF ADDED FONTS ---
-
-# --- Suspicious Patterns (From User's File, refined regex) ---
-SUSPICIOUS_PATTERNS = [
-    # Regex Pattern                 # Label (Consider adding icons here too if desired)
-    (r"https?://\S+", "🔗 Contains URL"),
-    (r"\b(verify|confirm)\s+(your|my)\s+(account|identity|information)\b", "🔒 Verification prompt"),
-    (r"\b(reset|update)\s+(your|my)\s+password\b", "🔐 Password reset"),
-    (r"\b(urgent|immediate(ly)?|action\s+(required|needed)|final\s+notice)\b", "⚠️ Urgency"),
-    (r"\bclick\s+here\b", "🖱️ Generic 'Click Here'"),
-    (r"\baccount\s+(suspended|locked|compromised|closed|deactivated)\b", "🚫 Account Threat"),
-    (r"\b(security|unusual|suspicious)\s+(alert|activity|login)\b", "🛡️ Security Alert"),
-    (r"\b(won|prize|claim|lottery|winner)\b", "💰 Prize/Lottery Scam"),
-    (r"\b(invoice|payment|due|overdue|bill)\b", "🧾 Fake Invoice/Payment"),
-    (r"\b(dear\s+(user|customer|client)|hello\b((?!\s+\w+)|$))", "🏷️ Generic Greeting"), # More specific generic greeting
-    (r"\b(password|passcode|credential)\b", "🔑 Password Mentioned"),
-    (r"\b(account\s+number|ssn|social\s+security|bank\s+details)\b", "👤 Sensitive Info Request"),
-    (r"\b(job\s+offer|hiring|recruiting|interview)\b", "💼 Suspicious Job Offer") # Added job offer
-]
-
-
-# --- Text Analysis ---
-def find_suspicious_text(text):
-    """Finds suspicious text patterns using regex."""
-    results = []
-    if not text:
-        return results
-    for pattern, label in SUSPICIOUS_PATTERNS:
+class AppFonts:
+    PRIMARY_FAMILY = "Arial"
+    TITLE = None
+    SUBTITLE = None
+    CHAT_FONT = None
+    BUTTON_FONT = None
+    INFO_FONT = None
+    
+    @classmethod
+    def init_fonts(cls):
         try:
-            # Use finditer to find all non-overlapping matches
-            for match in re.finditer(pattern, text, re.IGNORECASE):
-                # Store the matched text and the label
-                results.append((match.group(0).strip(), label))
-        except re.error as e:
-            print(f"Regex error for pattern '{pattern}': {e}")
+            ctk.CTkFont(family="Helvetica Neue")
+            cls.PRIMARY_FAMILY = "Helvetica Neue"
+            print("✅ Using 'Helvetica Neue' font.")
+        except Exception:
+            cls.PRIMARY_FAMILY = "Arial"
+            print("⚠️ Using fallback font 'Arial'.")
+        
+        cls.TITLE = ctk.CTkFont(family=cls.PRIMARY_FAMILY, size=24, weight="bold")
+        cls.SUBTITLE = ctk.CTkFont(family=cls.PRIMARY_FAMILY, size=18, weight="bold")
+        cls.CHAT_FONT = ctk.CTkFont(family=cls.PRIMARY_FAMILY, size=15)
+        cls.BUTTON_FONT = ctk.CTkFont(family=cls.PRIMARY_FAMILY, size=14, weight="normal")
+        cls.INFO_FONT = ctk.CTkFont(family=cls.PRIMARY_FAMILY, size=12)
 
-    # Remove duplicates based on the matched text, keeping the first label found
-    unique_results = []
-    seen_matches = set()
-    for match_text, label in results:
-        # Use lower case for seen check to catch case variations of same match
-        match_key = match_text.lower()
-        # Basic check to avoid adding very short, potentially meaningless matches
-        if len(match_key) > 2 and match_key not in seen_matches:
-            unique_results.append((match_text, label))
-            seen_matches.add(match_key)
-
-    return unique_results
-
-# --- OCR Function ---
-def perform_ocr(image_path):
-    """Extracts text from the specified image file using Tesseract."""
+# === IMAGE LOADING ===
+def load_ctk_image(path, size=(100, 100)):
+    if not PIL_AVAILABLE or not os.path.exists(path):
+        return None
     try:
-        print(f"Attempting OCR on: {image_path}")
+        img = Image.open(path)
+        img = img.resize(size, Image.Resampling.LANCZOS)
+        return ctk.CTkImage(light_image=img, dark_image=img, size=size)
+    except Exception as e:
+        print(f"Error loading image: {e}")
+        return None
+
+# === OCR ===
+def perform_ocr(image_path: str) -> str:
+    if not PYTESSERACT_AVAILABLE:
+        print("Mock OCR: Returning dummy text.")
+        return """
+        Subject: URGENT: Verify Your Account Password!
+        Dear User, please confirm your password by clicking here: http://example-phish.com
+        Thanks, Support Team
+        """
+    try:
         if not os.path.exists(image_path):
-             print(f"❌ Error: Image file not found at {image_path}")
-             return "Error: Image file not found."
-
-        # Check if Tesseract executable path needs to be set explicitly
-        # Example (uncomment and adjust path if needed):
-        # if sys.platform == "win32":
-        #     pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-
+            return f"Error: Image path not found: {image_path}"
+        
         img = Image.open(image_path)
-        ocr_text = pytesseract.image_to_string(img)
-        print(f"✅ OCR successful. Text length: {len(ocr_text)}")
-        return ocr_text.strip() # Return stripped text
-    except pytesseract.TesseractNotFoundError:
-         msg = "❌ Error: Tesseract is not installed or not in your system's PATH. Please install Tesseract OCR."
-         print(msg)
-         return "Error: Tesseract OCR engine not found."
-    except FileNotFoundError:
-         print(f"❌ Error: Image file disappeared before opening: {image_path}")
-         return "Error: Image file disappeared."
+        text = pytesseract.image_to_string(img)
+        return text.strip() if text.strip() else "No text found in image."
     except Exception as e:
-        print(f"❌ Error during OCR: {e}")
-        return f"Error during OCR: {e}"
+        print(f"Error during OCR: {e}")
+        return f"Error performing OCR: {e}"
 
-
-# --- UI Helper Functions ---
-def force_window_focus(window):
-    """Forces the window to the front (best effort, platform-dependent)."""
-    print("Attempting to force window focus...")
+# === SCAM ANALYSIS ===
+def analyze_screenshot_advanced(image_path, ocr_text):
     try:
-        # Tkinter's methods first
-        window.lift()
-        window.focus_force() # Request focus
-        window.attributes('-topmost', True) # Bring to top
-        window.after(100, lambda: window.attributes('-topmost', False)) # Release topmost
-
-        # Platform-specific attempts (might be less reliable)
-        if sys.platform == "darwin": # macOS
-            pid = os.getpid()
-            script = f'''
-            tell application "System Events"
-                try
-                    set frontmost of first process whose unix id is {pid} to true
-                on error errMsg number errorNumber
-                    log "Error focusing window (AppleScript): " & errMsg
-                end try
-            end tell
-            '''
-            os.system(f"/usr/bin/osascript -e '{script}' > /dev/null 2>&1") # Suppress output/errors
-        elif sys.platform == "win32": # Windows
-            import ctypes
-            hwnd = window.winfo_id()
-            if hwnd:
-                ctypes.windll.user32.SetForegroundWindow(hwnd)
-                ctypes.windll.user32.BringWindowToTop(hwnd)
-
-    except tkinter.TclError as e:
-         print(f"[Window Focus Error] Ignoring TclError: {e}")
+        from components.scam_classifier import scam_classifier
+        result = scam_classifier.analyze_scam_risk(ocr_text)
+        
+        reasons_formatted = []
+        reason_mapping = {
+            "urgency_language": ("Urgent language detected", "Urgency"),
+            "suspicious_url": ("Suspicious URL pattern", "Suspicious URL"),
+            "password_request": ("Password/credential request", "Credential Theft"),
+            "suspicious_popup": ("Suspicious popup/window", "UI Deception"),
+            "ml_detected_phishing": ("AI detected phishing pattern", "ML Classification"),
+            "ml_detected_urgent": ("AI detected urgency scam", "ML Classification")
+        }
+        
+        for reason in result["reasons"]:
+            if reason in reason_mapping:
+                reasons_formatted.append(reason_mapping[reason])
+            else:
+                reasons_formatted.append((reason, "AI Detection"))
+        
+        print(f"🔍 ACTORS Analysis: {result['severity'].upper()} risk")
+        print(f"   ML Confidence: {result.get('ml_confidence', 0):.2f}")
+        
+        return {
+            "severity": result["severity"],
+            "reasons": reasons_formatted,
+            "confidence": result["confidence"],
+            "ml_analysis": result
+        }
+        
     except Exception as e:
-        print(f"[Window Focus Error] Could not force focus: {e}")
+        print(f"❌ ML analysis failed: {e}")
+        return _fallback_regex_analysis(ocr_text)
 
+def _fallback_regex_analysis(ocr_text: str):
+    findings = []
+    text_lower = ocr_text.lower()
 
-def load_ctk_image(path, size):
-    """Safely loads a CTkImage using PIL, returning the image object or None."""
-    # Use the global PIL_AVAILABLE check defined at the top of this file
-    if PIL_AVAILABLE and os.path.exists(path):
-        try:
-            img = Image.open(path)
-            # Ensure size is a tuple of integers
-            size = (int(size[0]), int(size[1]))
-            return CTkImage(img, size=size) # Return CTkImage directly
-        except FileNotFoundError:
-             print(f"Warning: Image file not found at {path} (inside load_ctk_image)")
-             return None
-        except Exception as e:
-            print(f"Error loading image {path} with PIL: {e}")
-            return None
-    elif not os.path.exists(path):
-         print(f"Warning: Image file not found at {path}")
-         return None
-    else: # PIL not available
-         print(f"Cannot load image {path}: PIL (Pillow) is not installed.")
-         return None
+    if re.search(r'urgent|immediately|action required|verify now', text_lower):
+        findings.append(("Urgent language detected", "Urgency"))
+    
+    if re.search(r'dear user|dear customer|valued member', text_lower):
+        findings.append(("Generic greeting", "Impersonal"))
+
+    urls = re.findall(r'https?://[^\s]+', text_lower)
+    suspicious_domains = ['bit.ly', 'tinyurl', 'click-here', 'verify-account']
+    for url in urls:
+        if any(domain in url for domain in suspicious_domains):
+            findings.append((f"Suspicious URL: {url[:50]}...", "Suspicious URL"))
+            break
+
+    if re.search(r'password|login|credentials|account verification', text_lower):
+        findings.append(("Password/credential request", "Credential Theft"))
+
+    if re.search(r'paypal|bank|credit card|ssn|social security', text_lower):
+        findings.append(("Financial information request", "Financial"))
+
+    return findings
+
+# === UTILITIES ===
+def calculate_text_entropy(text: str) -> float:
+    if len(text) == 0:
+        return 0.0
+    from collections import Counter
+    counts = Counter(text)
+    return -sum((count/len(text)) * np.log2(count/len(text)) for count in counts.values())
+
+def extract_urls(text: str) -> list[str]:
+    import re
+    return re.findall(r'https?://[^\s]+', text)
+
+def contains_financial_terms(text: str) -> bool:
+    financial_terms = ["paypal", "bank", "credit card", "ssn", "social security"]
+    return any(term in text.lower() for term in financial_terms)
+
+def create_test_image(filepath: str, text: str = "Test phishing content") -> bool:
+    if not PIL_AVAILABLE:
+        return False
+    try:
+        img = Image.new('RGB', (600, 400), color=(200, 220, 255))
+        draw = ImageDraw.Draw(img)
+        try: 
+            fnt = ImageFont.truetype("arial.ttf", 15)
+        except IOError: 
+            fnt = ImageFont.load_default()
+        draw.text((10, 10), text, fill=(0, 0, 0), font=fnt)
+        img.save(filepath)
+        return True
+    except Exception as e:
+        print(f"Failed to create test image: {e}")
+        return False
